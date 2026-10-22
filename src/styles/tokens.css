@@ -1,0 +1,78 @@
+:root {
+  color-scheme: dark;
+
+  /* Core Design Tokens */
+  --bg-main: #191A1F;
+  --bg-sidebar: #17181D;
+  --bg-sidebar-hover: #1E2026;
+  --bg-sidebar-active: #22242B;
+  --bg-panel: #25262C;
+  --bg-panel-hover: #2B2C33;
+  --bg-panel-active: #30323A;
+  --bg-input: #1D1E24;
+  --bg-input-focus: #22232A;
+  --bg-dropdown: #202127;
+  
+  /* Borders */
+  --border-subtle: #34353C;
+  --border-subtle-hover: #454751;
+  --border-active: #7C7CF8;
+  --border-subtle-dim: #2A2B32;
+
+  /* Primary Accent - Electric Indigo */
+  --accent-primary: #7C7CF8;
+  --accent-primary-hover: #8F8FF9;
+  --accent-primary-active: #6B6BE8;
+  --accent-subtle: rgba(124, 124, 248, 0.12);
+  --accent-subtle-hover: rgba(124, 124, 248, 0.20);
+  --accent-border: rgba(124, 124, 248, 0.35);
+
+  /* Typography */
+  --text-primary: #F4F4F5;
+  --text-secondary: #A5A6B0;
+  --text-muted: #6E707B;
+  --text-accent: #9B9BF9;
+
+  /* Status Colors */
+  --status-success: #34D399;
+  --status-success-bg: rgba(52, 211, 153, 0.12);
+  --status-success-border: rgba(52, 211, 153, 0.3);
+  --status-warning: #FBBF24;
+  --status-warning-bg: rgba(251, 191, 36, 0.12);
+  --status-warning-border: rgba(251, 191, 36, 0.3);
+  --status-danger: #F87171;
+  --status-danger-bg: rgba(248, 113, 113, 0.12);
+  --status-danger-border: rgba(248, 113, 113, 0.3);
+  --status-running: #7C7CF8;
+  --status-running-bg: rgba(124, 124, 248, 0.12);
+  --status-running-border: rgba(124, 124, 248, 0.3);
+
+  /* Layout & Sizing */
+  --sidebar-width: 230px;
+  --sidebar-width-collapsed: 64px;
+  --topbar-height: 48px;
+
+  /* Spacing */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radii */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 10px;
+  --radius-full: 9999px;
+
+  /* Fonts */
+  --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', 'SF Mono', Consolas, monospace;
+
+  /* Subtle UI Transitions */
+  --transition-fast: 120ms ease;
+  --transition-normal: 180ms cubic-bezier(0.16, 1, 0.3, 1);
+}
