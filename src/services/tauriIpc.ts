@@ -132,3 +132,117 @@ export const windowControls = {
     }
   },
 };
+
+export interface CredentialPairMetadata {
+  pair_index: number;
+  account_id_masked: string;
+  is_valid: boolean;
+}
+
+export interface CredentialsStatus {
+  configured_count: number;
+  pairs: CredentialPairMetadata[];
+  preferred_index: number;
+  model_id: string;
+}
+
+export interface PairTestResult {
+  pair_index: number;
+  account_id_masked: string;
+  status: 'connected' | 'failed';
+  error_message?: string | null;
+}
+
+export interface OverallTestResult {
+  all_tested: boolean;
+  any_connected: boolean;
+  results: PairTestResult[];
+}
+
+export interface ChatMessagePayload {
+  role: 'system' | 'user' | 'assistant';
+  content: string;
+}
+
+export interface StreamChunkPayload {
+  conversation_id: string;
+  message_id: string;
+  chunk: string;
+}
+
+export interface StreamDonePayload {
+  conversation_id: string;
+  message_id: string;
+  full_text: string;
+  cancelled: boolean;
+  error?: string | null;
+  prompt_tokens?: number | null;
+  completion_tokens?: number | null;
+  total_tokens?: number | null;
+}
+
+export const cloudflareService = {
+  async getStatus(): Promise<CredentialsStatus> {
+    if (isTauriDesktop()) {
+      return await invoke<CredentialsStatus>('get_cloudflare_status');
+    }
+    return {
+      configured_count: 0,
+      pairs: [],
+      preferred_index: 0,
+      model_id: '@cf/qwen/qwen3.8-27b',
+    };
+  },
+
+  async saveCredentials(accountIds: string, apiKeys: string): Promise<CredentialsStatus> {
+    if (isTauriDesktop()) {
+      return await invoke<CredentialsStatus>('save_cloudflare_credentials', {
+        accountIds,
+        apiKeys,
+      });
+    }
+    throw new Error('OS secure storage is only available in Tauri desktop application');
+  },
+
+  async testCredentials(): Promise<OverallTestResult> {
+    if (isTauriDesktop()) {
+      return await invoke<OverallTestResult>('test_cloudflare_credentials');
+    }
+    return {
+      all_tested: true,
+      any_connected: false,
+      results: [],
+    };
+  },
+
+  async clearCredentials(): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('clear_cloudflare_credentials');
+    }
+  },
+
+  async startChatStream(
+    conversationId: string,
+    messageId: string,
+    messages: ChatMessagePayload[],
+    maxTokens?: number,
+    temperature?: number
+  ): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('start_chat_stream', {
+        conversationId,
+        messageId,
+        messages,
+        maxTokens: maxTokens ?? 4096,
+        temperature: temperature ?? 0.2,
+      });
+    }
+  },
+
+  async stopChatStream(conversationId: string): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('stop_chat_stream', { conversationId });
+    }
+  },
+};
+

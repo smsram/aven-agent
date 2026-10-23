@@ -26,8 +26,8 @@ const DEFAULT_SETTINGS: AppSettings = {
     showStatusBar: true,
   },
   api: {
-    activeProvider: 'anthropic',
-    activeModel: 'Claude 3.7 Sonnet',
+    activeProvider: 'cloudflare',
+    activeModel: '@cf/qwen/qwen3.8-27b',
     temperature: 0.2,
     maxTokens: 4096,
   },
@@ -46,13 +46,7 @@ const DEFAULT_SETTINGS: AppSettings = {
 };
 
 const AVAILABLE_MODELS = [
-  'Claude 3.7 Sonnet',
-  'Claude 3.5 Sonnet',
-  'GPT-4o',
-  'o3-mini',
-  'Gemini 2.5 Pro',
-  'DeepSeek-R1 (Local)',
-  'Llama 3.3 70B',
+  '@cf/qwen/qwen3.8-27b',
 ];
 
 export function App() {
@@ -129,13 +123,7 @@ export function App() {
   }, []);
 
   const handleCreateTask = (prompt: string, model: string) => {
-    const provider = model.includes('Claude')
-      ? 'Anthropic'
-      : model.includes('GPT') || model.includes('o3')
-      ? 'OpenAI'
-      : model.includes('Gemini')
-      ? 'Google Gemini'
-      : 'Ollama';
+    const provider = 'Cloudflare Workers AI';
     const newTask = taskStore.createTask('', prompt, model, provider);
     setActiveConversationId(newTask.id);
     setActiveTab('new-chat');

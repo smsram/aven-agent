@@ -2,7 +2,10 @@ use keyring::Entry;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::Manager;
+
+pub mod cloudflare;
 
 const SERVICE_NAME: &str = "com.aven.agent";
 
@@ -124,8 +127,12 @@ fn close_window(window: tauri::Window) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let initial_pairs = cloudflare::load_credentials_from_keyring().unwrap_or_default();
+    let cloudflare_state = Arc::new(cloudflare::CloudflareState::new(initial_pairs));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .manage(cloudflare_state)
         .setup(|app| {
             let icon_bytes = include_bytes!("../icons/icon.png");
             if let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes) {
@@ -146,7 +153,13 @@ pub fn run() {
             minimize_window,
             toggle_maximize_window,
             is_window_maximized,
-            close_window
+            close_window,
+            cloudflare::get_cloudflare_status,
+            cloudflare::save_cloudflare_credentials,
+            cloudflare::test_cloudflare_credentials,
+            cloudflare::clear_cloudflare_credentials,
+            cloudflare::start_chat_stream,
+            cloudflare::stop_chat_stream
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aven desktop application");

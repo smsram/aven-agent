@@ -67,7 +67,7 @@ export const TaskInput: React.FC<TaskInputProps> = ({
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Assign a task to Aven... (e.g. 'Audit Cargo dependencies and refactor secure storage')"
+        placeholder="Ask Cloudflare Workers AI... (Enter to send, Shift+Enter for new line)"
         rows={3}
         style={{
           width: '100%',
@@ -108,6 +108,7 @@ export const TaskInput: React.FC<TaskInputProps> = ({
               border: '1px solid var(--border-subtle)',
               fontSize: '12px',
               color: 'var(--text-secondary)',
+              fontFamily: 'var(--font-mono)',
             }}
           >
             <Sparkles size={12} color="var(--accent-primary)" />
@@ -122,7 +123,7 @@ export const TaskInput: React.FC<TaskInputProps> = ({
                 position: 'absolute',
                 top: '32px',
                 left: 0,
-                width: '210px',
+                width: '240px',
                 backgroundColor: 'var(--bg-dropdown)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-md)',
@@ -141,7 +142,7 @@ export const TaskInput: React.FC<TaskInputProps> = ({
                   letterSpacing: '0.04em',
                 }}
               >
-                Model Provider
+                Cloudflare Workers AI
               </div>
               {availableModels.map((m) => {
                 const isSelected = m === selectedModel;

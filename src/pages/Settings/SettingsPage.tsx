@@ -13,11 +13,21 @@ import {
   Folder,
   Trash2,
   X,
+  AlertCircle,
+  CheckCircle2,
+  RefreshCw,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
-import { AppSettings, ProviderId, ShortcutItem } from '../../types';
+import { AppSettings, ShortcutItem } from '../../types';
 import { Button } from '../../components/common/Button';
 import { Switch } from '../../components/common/Switch';
-import { secureStore } from '../../services/tauriIpc';
+import {
+  secureStore,
+  cloudflareService,
+  CredentialsStatus,
+  OverallTestResult,
+} from '../../services/tauriIpc';
 
 export interface SettingsPageProps {
   isOpen: boolean;
@@ -38,10 +48,17 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const [form, setForm] = useState<AppSettings>(settings);
   const [savedSuccess, setSavedSuccess] = useState(false);
-  const [apiKeyInput, setApiKeyInput] = useState('');
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [hasStoredKey, setHasStoredKey] = useState(false);
-  const [apiSaveStatus, setApiSaveStatus] = useState<string | null>(null);
+
+  // Cloudflare Workers AI Credential State
+  const [accountIdsInput, setAccountIdsInput] = useState('');
+  const [apiKeysInput, setApiKeysInput] = useState('');
+  const [showApiKeys, setShowApiKeys] = useState(false);
+  const [cfStatus, setCfStatus] = useState<CredentialsStatus | null>(null);
+  const [cfSaveStatus, setCfSaveStatus] = useState<string | null>(null);
+  const [cfValidationErr, setCfValidationErr] = useState<string | null>(null);
+  const [isSavingCf, setIsSavingCf] = useState(false);
+  const [isTestingCf, setIsTestingCf] = useState(false);
+  const [testResults, setTestResults] = useState<OverallTestResult | null>(null);
 
   useEffect(() => {
     setForm(settings);
@@ -49,14 +66,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   useEffect(() => {
     if (isOpen) {
-      secureStore.hasApiKey(form.api.activeProvider).then((exists) => {
-        setHasStoredKey(exists);
-        setApiKeyInput('');
-        setShowApiKey(false);
-        setApiSaveStatus(null);
+      cloudflareService.getStatus().then((status) => {
+        setCfStatus(status);
       });
+      setCfValidationErr(null);
+      setCfSaveStatus(null);
     }
-  }, [form.api.activeProvider, isOpen]);
+  }, [isOpen]);
 
   // Handle ESC key to close modal
   useEffect(() => {
@@ -79,45 +95,80 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setTimeout(() => setSavedSuccess(false), 2000);
   };
 
-  const handleSaveApiKey = async () => {
-    if (!apiKeyInput.trim()) return;
+  const parsedAccountIds = accountIdsInput
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const parsedApiKeys = apiKeysInput
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const handleSaveCloudflare = async () => {
+    setCfValidationErr(null);
+    setCfSaveStatus(null);
+
+    if (parsedAccountIds.length === 0 || parsedApiKeys.length === 0) {
+      setCfValidationErr('Please enter at least one Account ID and matching API Key.');
+      return;
+    }
+
+    if (parsedAccountIds.length !== parsedApiKeys.length) {
+      setCfValidationErr(
+        `Mismatched count: ${parsedAccountIds.length} Account ID(s) provided, but ${parsedApiKeys.length} API Key(s) provided. Each Account ID must have exactly one corresponding API Key.`
+      );
+      return;
+    }
+
+    setIsSavingCf(true);
     try {
-      setApiSaveStatus('Saving to Windows Credential Manager...');
-      await secureStore.setApiKey(form.api.activeProvider, apiKeyInput.trim());
-      setHasStoredKey(true);
-      setApiKeyInput('');
-      setShowApiKey(false);
-      setApiSaveStatus('Saved in OS Credential Manager');
-      setTimeout(() => setApiSaveStatus(null), 2500);
-    } catch (e: any) {
-      setApiSaveStatus(`Error: ${e.toString()}`);
+      const updated = await cloudflareService.saveCredentials(accountIdsInput, apiKeysInput);
+      setCfStatus(updated);
+      setAccountIdsInput('');
+      setApiKeysInput('');
+      setShowApiKeys(false);
+      setTestResults(null);
+      setCfSaveStatus(
+        `Successfully saved ${updated.configured_count} credential pair(s) in Windows Credential Manager.`
+      );
+      setTimeout(() => setCfSaveStatus(null), 3000);
+    } catch (err: any) {
+      setCfValidationErr(err.toString());
+    } finally {
+      setIsSavingCf(false);
     }
   };
 
-  const handleRevealKey = async () => {
-    if (!showApiKey) {
-      try {
-        const stored = await secureStore.getApiKey(form.api.activeProvider);
-        if (stored) {
-          setApiKeyInput(stored);
-        }
-      } catch {
-        // fail gracefully
-      }
+  const handleTestConnection = async () => {
+    setIsTestingCf(true);
+    setCfValidationErr(null);
+    setTestResults(null);
+    try {
+      const res = await cloudflareService.testCredentials();
+      setTestResults(res);
+    } catch (err: any) {
+      setCfValidationErr(`Test connection failed: ${err.toString()}`);
+    } finally {
+      setIsTestingCf(false);
     }
-    setShowApiKey(!showApiKey);
   };
 
-  const handleDeleteKey = async () => {
+  const handleClearCloudflare = async () => {
     try {
-      await secureStore.deleteApiKey(form.api.activeProvider);
-      setHasStoredKey(false);
-      setApiKeyInput('');
-      setShowApiKey(false);
-      setApiSaveStatus('Key deleted from OS Credential Manager');
-      setTimeout(() => setApiSaveStatus(null), 2500);
-    } catch (e: any) {
-      setApiSaveStatus(`Error: ${e.toString()}`);
+      await cloudflareService.clearCredentials();
+      setCfStatus({
+        configured_count: 0,
+        pairs: [],
+        preferred_index: 0,
+        model_id: '@cf/qwen/qwen3.8-27b',
+      });
+      setAccountIdsInput('');
+      setApiKeysInput('');
+      setTestResults(null);
+      setCfSaveStatus('Cleared all credentials from Windows Credential Manager.');
+      setTimeout(() => setCfSaveStatus(null), 2500);
+    } catch (err: any) {
+      setCfValidationErr(`Clear error: ${err.toString()}`);
     }
   };
 
@@ -521,63 +572,114 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
               )}
 
-              {/* 3. API (AI Provider Configuration & Keys) */}
+              {/* 3. API (Cloudflare Workers AI Exclusive Configuration) */}
               {activeSection === 'api' && (
                 <div>
-                  <h2 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)', marginBottom: '3px' }}>
-                    API & Model Providers
-                  </h2>
-                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '18px' }}>
-                    Configure AI model providers and secure OS credential storage
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '3px' }}>
+                    <h2 style={{ fontSize: '14px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                      Cloudflare Workers AI Configuration
+                    </h2>
+                    <span
+                      style={{
+                        fontSize: '11px',
+                        padding: '2px 8px',
+                        borderRadius: 'var(--radius-sm)',
+                        backgroundColor: 'var(--accent-subtle)',
+                        border: '1px solid var(--accent-border)',
+                        color: 'var(--accent-primary)',
+                        fontFamily: 'var(--font-mono)',
+                      }}
+                    >
+                      @cf/qwen/qwen3.8-27b
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
+                    Configure multiple Cloudflare Account IDs and API Keys with automatic failover and OS credential isolation.
                   </p>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    <div>
-                      <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', display: 'block', marginBottom: '6px' }}>
-                        Model Provider
-                      </label>
-                      <select
-                        value={form.api.activeProvider}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            api: { ...form.api, activeProvider: e.target.value as ProviderId },
-                          })
-                        }
-                        style={{
-                          width: '100%',
-                          height: '32px',
-                          padding: '0 10px',
-                          backgroundColor: 'var(--bg-input)',
-                          border: '1px solid var(--border-subtle)',
-                          borderRadius: 'var(--radius-md)',
-                          color: 'var(--text-primary)',
-                          fontSize: '13px',
-                        }}
-                      >
-                        <option value="anthropic">Anthropic (Claude 3.7 Sonnet, Claude 3.5)</option>
-                        <option value="openai">OpenAI (GPT-4o, o3-mini)</option>
-                        <option value="gemini">Google Gemini (Gemini 2.5 Pro, 2.0 Flash)</option>
-                        <option value="ollama">Ollama (Local Models)</option>
-                        <option value="groq">Groq Cloud (Fast LPU)</option>
-                        <option value="openrouter">OpenRouter (Multi-model Gateway)</option>
-                      </select>
+                    {/* Model Details Card */}
+                    <div
+                      style={{
+                        padding: '12px 14px',
+                        borderRadius: 'var(--radius-md)',
+                        backgroundColor: 'var(--bg-panel)',
+                        border: '1px solid var(--border-subtle)',
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: '6px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
+                          Model Information
+                        </span>
+                        <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                          Cloudflare Workers AI Exclusive
+                        </span>
+                      </div>
+                      <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                        <p style={{ margin: '0 0 4px 0' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>Model ID:</strong>{' '}
+                          <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', backgroundColor: 'var(--bg-input)', padding: '1px 5px', borderRadius: '3px' }}>
+                            @cf/qwen/qwen3.8-27b
+                          </code>
+                        </p>
+                        <p style={{ margin: '0 0 4px 0' }}>
+                          <strong style={{ color: 'var(--text-primary)' }}>Endpoint:</strong>{' '}
+                          <code style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
+                            https://api.cloudflare.com/client/v4/accounts/&#123;ACCOUNT_ID&#125;/ai/run/@cf/qwen/qwen3.8-27b
+                          </code>
+                        </p>
+                        <p style={{ margin: 0, color: 'var(--text-muted)' }}>
+                          Supports streaming tokens via Server-Sent Events (SSE). Requests are executed directly from the native Tauri Rust backend.
+                        </p>
+                      </div>
                     </div>
 
+                    {/* How Credential Pairing Works Notice */}
+                    <div
+                      style={{
+                        padding: '10px 12px',
+                        borderRadius: 'var(--radius-md)',
+                        backgroundColor: '#1E2028',
+                        border: '1px solid #323544',
+                        display: 'flex',
+                        gap: '10px',
+                        alignItems: 'flex-start',
+                      }}
+                    >
+                      <Info size={16} color="var(--accent-primary)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                      <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
+                        <strong style={{ color: 'var(--text-primary)', display: 'block', marginBottom: '2px' }}>
+                          How Multiple Credentials and Failover Work:
+                        </strong>
+                        Enter comma-separated values for Account IDs and API Keys. They are paired sequentially in order:
+                        <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
+                          <li><strong>Pair 1:</strong> Account 1 + API Key 1 (preferred primary)</li>
+                          <li><strong>Pair 2:</strong> Account 2 + API Key 2 (automatic fallback on rate limits or errors)</li>
+                        </ul>
+                        Whitespace is trimmed. Leading, trailing, and repeated commas are ignored. All keys are encrypted in the native Windows Credential Manager.
+                      </div>
+                    </div>
+
+                    {/* Account IDs Input */}
                     <div>
-                      <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)', display: 'block', marginBottom: '6px' }}>
-                        Default Model Name
-                      </label>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+                        <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)' }}>
+                          Cloudflare Account IDs (comma-separated)
+                        </label>
+                        {parsedAccountIds.length > 0 && (
+                          <span style={{ fontSize: '11px', color: 'var(--accent-primary)' }}>
+                            {parsedAccountIds.length} account{parsedAccountIds.length > 1 ? 's' : ''} detected
+                          </span>
+                        )}
+                      </div>
                       <input
                         type="text"
-                        value={form.api.activeModel}
-                        onChange={(e) =>
-                          setForm({
-                            ...form,
-                            api: { ...form.api, activeModel: e.target.value },
-                          })
-                        }
-                        placeholder="e.g. Claude 3.7 Sonnet"
+                        value={accountIdsInput}
+                        onChange={(e) => setAccountIdsInput(e.target.value)}
+                        placeholder="e.g. account_id_1, account_id_2, account_id_3"
                         style={{
                           width: '100%',
                           height: '32px',
@@ -587,123 +689,346 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                           borderRadius: 'var(--radius-md)',
                           color: 'var(--text-primary)',
                           caretColor: 'var(--accent-primary)',
-                          cursor: 'text',
-                          fontSize: '13px',
+                          fontSize: '12.5px',
+                          fontFamily: 'var(--font-mono)',
                         }}
                       />
                     </div>
 
-                    <div style={{ height: '1px', backgroundColor: 'var(--border-subtle)' }} />
-
-                    {/* Secret Key Input with Masking & Windows Credential Manager storage */}
+                    {/* API Keys Input */}
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)' }}>
-                          {form.api.activeProvider.toUpperCase()} API Key
+                          Cloudflare API Keys (comma-separated)
                         </label>
-                        <span
-                          style={{
-                            fontSize: '11px',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '4px',
-                            color: hasStoredKey ? 'var(--status-success)' : 'var(--text-muted)',
-                          }}
-                        >
-                          <span
-                            style={{
-                              width: '5px',
-                              height: '5px',
-                              borderRadius: '50%',
-                              backgroundColor: hasStoredKey ? 'var(--status-success)' : 'var(--text-muted)',
-                            }}
-                          />
-                          {hasStoredKey ? 'Stored in Windows Credential Manager' : 'No key stored'}
-                        </span>
+                        {parsedApiKeys.length > 0 && (
+                          <span style={{ fontSize: '11px', color: 'var(--accent-primary)' }}>
+                            {parsedApiKeys.length} key{parsedApiKeys.length > 1 ? 's' : ''} detected
+                          </span>
+                        )}
                       </div>
+                      <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+                        <input
+                          type={showApiKeys ? 'text' : 'password'}
+                          value={apiKeysInput}
+                          onChange={(e) => setApiKeysInput(e.target.value)}
+                          placeholder="e.g. api_key_1, api_key_2, api_key_3"
+                          style={{
+                            width: '100%',
+                            height: '32px',
+                            padding: '0 34px 0 10px',
+                            backgroundColor: 'var(--bg-input)',
+                            border: '1px solid var(--border-subtle)',
+                            borderRadius: 'var(--radius-md)',
+                            color: 'var(--text-primary)',
+                            caretColor: 'var(--accent-primary)',
+                            fontSize: '12.5px',
+                            fontFamily: showApiKeys ? 'var(--font-mono)' : 'inherit',
+                          }}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowApiKeys(!showApiKeys)}
+                          style={{
+                            position: 'absolute',
+                            right: '8px',
+                            background: 'transparent',
+                            border: 'none',
+                            color: 'var(--text-muted)',
+                            cursor: 'pointer',
+                            display: 'flex',
+                            alignItems: 'center',
+                          }}
+                          title={showApiKeys ? 'Hide API keys' : 'Show API keys'}
+                        >
+                          {showApiKeys ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </button>
+                      </div>
+                    </div>
 
-                      <div style={{ display: 'flex', gap: '8px' }}>
-                        <div style={{ position: 'relative', flex: 1, display: 'flex', alignItems: 'center' }}>
-                          <input
-                            type={showApiKey ? 'text' : 'password'}
-                            placeholder={hasStoredKey ? '••••••••••••••••••••••••••••' : 'Enter API Key'}
-                            value={apiKeyInput}
-                            onChange={(e) => setApiKeyInput(e.target.value)}
-                            style={{
-                              width: '100%',
-                              height: '32px',
-                              padding: '0 32px 0 10px',
-                              backgroundColor: 'var(--bg-input)',
-                              border: '1px solid var(--border-subtle)',
-                              borderRadius: 'var(--radius-md)',
-                              color: 'var(--text-primary)',
-                              caretColor: 'var(--accent-primary)',
-                              cursor: 'text',
-                              fontSize: '13px',
-                              fontFamily: showApiKey ? 'var(--font-mono)' : 'inherit',
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={handleRevealKey}
-                            style={{
-                              position: 'absolute',
-                              right: '8px',
-                              background: 'transparent',
-                              border: 'none',
-                              color: 'var(--text-muted)',
-                              cursor: 'pointer',
-                              display: 'flex',
-                              alignItems: 'center',
-                            }}
-                            title={showApiKey ? 'Hide key' : 'Show key'}
-                          >
-                            {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
-                          </button>
+                    {/* Pairing & Count Validation Indicator */}
+                    {accountIdsInput.trim() && apiKeysInput.trim() && (
+                      <div
+                        style={{
+                          padding: '6px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: parsedAccountIds.length === parsedApiKeys.length ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                          border: `1px solid ${parsedAccountIds.length === parsedApiKeys.length ? 'rgba(16, 185, 129, 0.25)' : 'rgba(239, 68, 68, 0.25)'}`,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                          fontSize: '11px',
+                          color: parsedAccountIds.length === parsedApiKeys.length ? '#34D399' : 'var(--status-danger)',
+                        }}
+                      >
+                        {parsedAccountIds.length === parsedApiKeys.length ? (
+                          <>
+                            <Check size={13} />
+                            <span>
+                              Valid pairing: {parsedAccountIds.length} Account ID{parsedAccountIds.length > 1 ? 's' : ''} matched 1-to-1 with {parsedApiKeys.length} API Key{parsedApiKeys.length > 1 ? 's' : ''}.
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle size={13} />
+                            <span>
+                              Mismatched count: {parsedAccountIds.length} Account ID(s) vs {parsedApiKeys.length} API Key(s). Each Account ID must have a matching API Key.
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Save and Clear Action Buttons */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={handleSaveCloudflare}
+                        disabled={isSavingCf || !accountIdsInput.trim() || !apiKeysInput.trim()}
+                        icon={isSavingCf ? <RefreshCw size={13} className="animate-spin" /> : <Save size={13} />}
+                      >
+                        {isSavingCf ? 'Saving to OS Credential Manager...' : 'Save Credentials'}
+                      </Button>
+
+                      {cfStatus && cfStatus.configured_count > 0 && (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleClearCloudflare}
+                          title="Remove all credentials from Windows Credential Manager"
+                        >
+                          <Trash2 size={13} color="var(--status-danger)" />
+                          <span style={{ color: 'var(--status-danger)' }}>Clear Stored Credentials</span>
+                        </Button>
+                      )}
+                    </div>
+
+                    {/* Feedback Messages */}
+                    {cfValidationErr && (
+                      <div
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                          border: '1px solid rgba(239, 68, 68, 0.3)',
+                          color: 'var(--status-danger)',
+                          fontSize: '11.5px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <AlertCircle size={14} style={{ flexShrink: 0 }} />
+                        <span>{cfValidationErr}</span>
+                      </div>
+                    )}
+
+                    {cfSaveStatus && (
+                      <div
+                        style={{
+                          padding: '8px 10px',
+                          borderRadius: 'var(--radius-sm)',
+                          backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                          border: '1px solid rgba(16, 185, 129, 0.3)',
+                          color: '#34D399',
+                          fontSize: '11.5px',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: '6px',
+                        }}
+                      >
+                        <CheckCircle2 size={14} style={{ flexShrink: 0 }} />
+                        <span>{cfSaveStatus}</span>
+                      </div>
+                    )}
+
+                    <div style={{ height: '1px', backgroundColor: 'var(--border-subtle)' }} />
+
+                    {/* Configured Credentials Status & Test Connection Section */}
+                    <div>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px' }}>
+                        <div>
+                          <label style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)', display: 'block' }}>
+                            OS Secure Credential Storage Status
+                          </label>
+                          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                            Encrypted in Windows Credential Manager (never exposed to frontend state)
+                          </span>
                         </div>
 
                         <Button
-                          variant="primary"
+                          variant="secondary"
                           size="sm"
-                          onClick={handleSaveApiKey}
-                          disabled={!apiKeyInput.trim()}
+                          onClick={handleTestConnection}
+                          disabled={isTestingCf || !cfStatus || cfStatus.configured_count === 0}
+                          icon={isTestingCf ? <RefreshCw size={12} className="animate-spin" /> : <RefreshCw size={12} />}
                         >
-                          Save Key
+                          {isTestingCf ? 'Testing All Pairs...' : 'Test Connection'}
                         </Button>
-
-                        {hasStoredKey && (
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={handleDeleteKey}
-                            title="Remove key from OS Credential Manager"
-                          >
-                            <Trash2 size={13} color="var(--status-danger)" />
-                          </Button>
-                        )}
                       </div>
 
-                      {apiSaveStatus && (
-                        <span
+                      {/* Configured Pairs List or Empty State */}
+                      {cfStatus && cfStatus.configured_count > 0 ? (
+                        <div
                           style={{
-                            fontSize: '11px',
-                            color: apiSaveStatus.includes('Error') ? 'var(--status-danger)' : 'var(--status-success)',
-                            marginTop: '4px',
-                            display: 'block',
+                            display: 'flex',
+                            flexDirection: 'column',
+                            gap: '6px',
+                            padding: '10px 12px',
+                            borderRadius: 'var(--radius-md)',
+                            backgroundColor: 'var(--bg-panel)',
+                            border: '1px solid var(--border-subtle)',
                           }}
                         >
-                          {apiSaveStatus}
-                        </span>
-                      )}
+                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                            <span style={{ fontSize: '11.5px', fontWeight: 500, color: 'var(--text-primary)' }}>
+                              Configured Credential Pairs ({cfStatus.configured_count}):
+                            </span>
+                            <span style={{ fontSize: '11px', color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)' }}>
+                              Preferred: Pair #{cfStatus.preferred_index + 1}
+                            </span>
+                          </div>
 
-                      <span style={{ fontSize: '11px', color: 'var(--text-muted)', marginTop: '4px', display: 'block' }}>
-                        Stored natively in the Windows Credential Manager (`keyring` crate) via Tauri Rust backend.
-                      </span>
+                          {cfStatus.pairs.map((p) => {
+                            const isPreferred = p.pair_index === cfStatus.preferred_index;
+                            const pairTest = testResults?.results.find((r) => r.pair_index === p.pair_index);
+
+                            return (
+                              <div
+                                key={p.pair_index}
+                                style={{
+                                  display: 'flex',
+                                  alignItems: 'center',
+                                  justifyContent: 'space-between',
+                                  padding: '6px 10px',
+                                  borderRadius: 'var(--radius-sm)',
+                                  backgroundColor: 'var(--bg-main)',
+                                  border: `1px solid ${isPreferred ? 'var(--accent-border)' : 'var(--border-subtle)'}`,
+                                  fontSize: '11.5px',
+                                }}
+                              >
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                  <span style={{ fontWeight: 600, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+                                    Pair #{p.pair_index + 1}
+                                  </span>
+                                  <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+                                    Account: {p.account_id_masked}
+                                  </span>
+                                  <span style={{ color: 'var(--text-muted)' }}>
+                                    • Key: ••••••••
+                                  </span>
+                                  {isPreferred && (
+                                    <span
+                                      style={{
+                                        fontSize: '10px',
+                                        padding: '1px 5px',
+                                        borderRadius: '3px',
+                                        backgroundColor: 'var(--accent-subtle)',
+                                        color: 'var(--accent-primary)',
+                                        fontWeight: 500,
+                                      }}
+                                    >
+                                      Primary
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Test Status for this pair */}
+                                <div>
+                                  {pairTest ? (
+                                    pairTest.status === 'connected' ? (
+                                      <span
+                                        style={{
+                                          fontSize: '11px',
+                                          color: '#34D399',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontWeight: 500,
+                                        }}
+                                      >
+                                        <CheckCircle2 size={12} /> Connected
+                                      </span>
+                                    ) : (
+                                      <span
+                                        style={{
+                                          fontSize: '11px',
+                                          color: 'var(--status-danger)',
+                                          display: 'inline-flex',
+                                          alignItems: 'center',
+                                          gap: '4px',
+                                          fontWeight: 500,
+                                        }}
+                                        title={pairTest.error_message || 'Verification failed'}
+                                      >
+                                        <AlertCircle size={12} /> Failed
+                                      </span>
+                                    )
+                                  ) : (
+                                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                      Not tested
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                          {/* Overall Test Status Banner */}
+                          {testResults && (
+                            <div
+                              style={{
+                                marginTop: '6px',
+                                padding: '8px 10px',
+                                borderRadius: 'var(--radius-sm)',
+                                backgroundColor: testResults.any_connected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
+                                border: `1px solid ${testResults.any_connected ? 'rgba(16, 185, 129, 0.3)' : 'rgba(239, 68, 68, 0.3)'}`,
+                                fontSize: '11.5px',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontWeight: 600, color: testResults.any_connected ? '#34D399' : 'var(--status-danger)' }}>
+                                {testResults.any_connected ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                                <span>
+                                  {testResults.any_connected
+                                    ? 'Overall Status: Cloudflare Workers AI is ready. At least one credential pair verified.'
+                                    : 'Overall Status: All credential pairs failed verification.'}
+                                </span>
+                              </div>
+                              {testResults.results.some((r) => r.status === 'failed') && (
+                                <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-secondary)' }}>
+                                  {testResults.results
+                                    .filter((r) => r.status === 'failed')
+                                    .map((r) => (
+                                      <div key={r.pair_index}>
+                                        • Pair #{r.pair_index + 1} ({r.account_id_masked}): {r.error_message}
+                                      </div>
+                                    ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <div
+                          style={{
+                            padding: '16px',
+                            textAlign: 'center',
+                            borderRadius: 'var(--radius-md)',
+                            backgroundColor: 'var(--bg-panel)',
+                            border: '1px dashed var(--border-subtle)',
+                            color: 'var(--text-muted)',
+                            fontSize: '12px',
+                          }}
+                        >
+                          No Cloudflare credential pairs currently configured. Enter comma-separated Account IDs and API Keys above and click "Save Credentials".
+                        </div>
+                      )}
                     </div>
 
                     <div style={{ height: '1px', backgroundColor: 'var(--border-subtle)' }} />
 
-                    {/* Temperature */}
+                    {/* Temperature Setting */}
                     <div>
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
                         <label style={{ fontSize: '12px', fontWeight: 500, color: 'var(--text-primary)' }}>

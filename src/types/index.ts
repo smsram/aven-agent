@@ -41,7 +41,7 @@ export interface AgentTask {
   messages?: ChatMessage[];
 }
 
-export type ProviderId = 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'groq' | 'mistral' | 'openrouter';
+export type ProviderId = 'cloudflare' | 'anthropic' | 'openai' | 'gemini' | 'ollama' | 'groq' | 'mistral' | 'openrouter';
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'configuring' | 'error';
 

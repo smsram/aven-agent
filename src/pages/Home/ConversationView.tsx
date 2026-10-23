@@ -1,7 +1,20 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { ArrowUp, Sparkles, ChevronDown, Check, Plus, Copy, CheckCheck } from 'lucide-react';
+import {
+  ArrowUp,
+  Sparkles,
+  ChevronDown,
+  Check,
+  Plus,
+  Copy,
+  CheckCheck,
+  Square,
+  RotateCcw,
+  AlertCircle,
+} from 'lucide-react';
 import { AgentTask } from '../../types';
 import { Button } from '../../components/common/Button';
+import { MarkdownMessage } from '../../components/chat/MarkdownMessage';
+import { taskStore } from '../../services/taskStore';
 
 export interface ConversationViewProps {
   task: AgentTask;
@@ -17,17 +30,28 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   availableModels,
 }) => {
   const [replyText, setReplyText] = useState('');
-  const [selectedModel, setSelectedModel] = useState(task.model || 'Claude 3.7 Sonnet');
+  const [selectedModel, setSelectedModel] = useState(task.model || '@cf/qwen/qwen3.8-27b');
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const isUserScrolledUp = useRef(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isGenerating = task.status === 'running' || task.messages?.some((m) => m.status === 'thinking');
 
-  // Auto-scroll to bottom on new messages or logs
+  // Track if user manually scrolls up to prevent disrupting reading
+  const handleScroll = () => {
+    if (!scrollContainerRef.current) return;
+    const { scrollTop, scrollHeight, clientHeight } = scrollContainerRef.current;
+    isUserScrolledUp.current = scrollHeight - scrollTop - clientHeight > 80;
+  };
+
+  // Auto-scroll to bottom only if user hasn't scrolled up
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (!isUserScrolledUp.current) {
+      messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    }
   }, [task.messages, task.logs]);
 
   // Focus textarea on mount
@@ -38,6 +62,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   const handleSend = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!replyText.trim() || isGenerating) return;
+    isUserScrolledUp.current = false;
     onSendMessage(replyText.trim(), selectedModel);
     setReplyText('');
   };
@@ -154,26 +179,29 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 backgroundColor: isGenerating ? 'var(--accent-primary)' : 'var(--status-success)',
               }}
             />
-            {isGenerating ? 'Aven Working...' : 'Ready'}
+            {isGenerating ? 'Streaming...' : 'Ready'}
           </span>
 
           <span
             style={{
               fontSize: '11px',
-              color: 'var(--text-muted)',
+              color: 'var(--accent-primary)',
               padding: '2px 6px',
               borderRadius: 'var(--radius-sm)',
               backgroundColor: 'var(--bg-panel)',
               border: '1px solid var(--border-subtle)',
+              fontFamily: 'var(--font-mono)',
             }}
           >
-            {task.model}
+            {task.model || '@cf/qwen/qwen3.8-27b'}
           </span>
         </div>
       </div>
 
       {/* Messages Scroll Area */}
       <div
+        ref={scrollContainerRef}
+        onScroll={handleScroll}
         style={{
           flex: 1,
           overflowY: 'auto',
@@ -233,7 +261,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                   alignItems: 'flex-start',
                   gap: '10px',
                   width: '100%',
-                  maxWidth: '88%',
+                  maxWidth: '92%',
                 }}
               >
                 {/* Aven Avatar */}
@@ -246,7 +274,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                     borderRadius: '4px',
                     objectFit: 'contain',
                     flexShrink: 0,
-                    marginTop: '2px',
+                    marginTop: '4px',
                   }}
                 />
 
@@ -266,8 +294,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                         <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
                           Aven
                         </span>
-                        <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontWeight: 500 }}>
-                          {task.model}
+                        <span style={{ fontSize: '10px', color: 'var(--accent-primary)', fontFamily: 'var(--font-mono)' }}>
+                          {task.model || '@cf/qwen/qwen3.8-27b'}
                         </span>
                       </div>
 
@@ -305,8 +333,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Genuine Loading / Thinking State */}
-                    {msg.status === 'thinking' && (
+                    {/* Genuine Initial Loading indicator if text is still empty */}
+                    {msg.status === 'thinking' && !msg.text && (
                       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', padding: '6px 0' }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: 'var(--accent-primary)', fontSize: '12px' }}>
                           <span
@@ -317,57 +345,67 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                               backgroundColor: 'var(--accent-primary)',
                               boxShadow: '0 0 8px var(--accent-primary)',
                             }}
+                            className="animate-pulse"
                           />
-                          <span>Aven is analyzing workspace context...</span>
+                          <span>Connecting to Cloudflare Workers AI...</span>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Markdown Formatted Content with Incremental Streaming Support */}
+                    {msg.text && (
+                      <MarkdownMessage
+                        content={msg.text}
+                        isStreaming={msg.status === 'thinking'}
+                      />
+                    )}
+
+                    {/* Error State with Sanitized Reason & Explicit Retry */}
+                    {msg.status === 'error' && (
+                      <div style={{ marginTop: '10px', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                        <div
+                          style={{
+                            padding: '8px 12px',
+                            borderRadius: 'var(--radius-sm)',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            border: '1px solid rgba(239, 68, 68, 0.25)',
+                            display: 'flex',
+                            alignItems: 'flex-start',
+                            gap: '8px',
+                          }}
+                        >
+                          <AlertCircle size={15} color="var(--status-danger)" style={{ flexShrink: 0, marginTop: '2px' }} />
+                          <div style={{ flex: 1, fontSize: '12px', color: 'var(--status-danger)' }}>
+                            <div style={{ fontWeight: 600 }}>Request Failed or Interrupted</div>
+                            {msg.logs && msg.logs.length > 0 && (
+                              <div style={{ marginTop: '4px', fontSize: '11px', color: 'var(--text-secondary)', whiteSpace: 'pre-line' }}>
+                                {msg.logs[msg.logs.length - 1].message}
+                              </div>
+                            )}
+                          </div>
                         </div>
 
-                        {/* Step Logs Stream */}
-                        {msg.logs && msg.logs.length > 0 && (
-                          <div
+                        <div>
+                          <button
+                            type="button"
+                            onClick={() => taskStore.retryMessage(task.id, msg.id)}
                             style={{
-                              marginTop: '6px',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: '6px',
+                              padding: '5px 10px',
+                              borderRadius: 'var(--radius-sm)',
                               backgroundColor: 'var(--bg-main)',
                               border: '1px solid var(--border-subtle)',
-                              borderRadius: 'var(--radius-sm)',
-                              padding: '8px 10px',
-                              fontFamily: 'var(--font-mono)',
-                              fontSize: '11px',
-                              display: 'flex',
-                              flexDirection: 'column',
-                              gap: '4px',
+                              color: 'var(--text-primary)',
+                              fontSize: '11.5px',
+                              cursor: 'pointer',
                             }}
                           >
-                            {msg.logs.map((log, li) => (
-                              <div key={li} style={{ display: 'flex', gap: '6px', color: 'var(--text-secondary)' }}>
-                                <span style={{ color: 'var(--text-muted)' }}>{log.timestamp}</span>
-                                <span style={{ color: 'var(--accent-primary)' }}>•</span>
-                                <span>{log.message}</span>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    )}
-
-                    {/* Result Content */}
-                    {msg.status !== 'thinking' && msg.text && (
-                      <div
-                        style={{
-                          fontSize: '13px',
-                          color: 'var(--text-primary)',
-                          lineHeight: 1.55,
-                          whiteSpace: 'pre-wrap',
-                          wordBreak: 'break-word',
-                        }}
-                      >
-                        {msg.text}
-                      </div>
-                    )}
-
-                    {/* Error State if any */}
-                    {msg.status === 'error' && (
-                      <div style={{ color: 'var(--status-danger)', fontSize: '12px', marginTop: '6px' }}>
-                        Execution encountered an issue. Please verify your connection or model settings.
+                            <RotateCcw size={12} color="var(--accent-primary)" />
+                            <span>Retry Request</span>
+                          </button>
+                        </div>
                       </div>
                     )}
 
@@ -429,7 +467,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
               value={replyText}
               onChange={(e) => setReplyText(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Reply to Aven... (Enter to send, Shift+Enter for new line)"
+              placeholder="Ask Cloudflare Workers AI... (Enter to send, Shift+Enter for new line)"
               rows={2}
               style={{
                 width: '100%',
@@ -474,7 +512,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                   }}
                 >
                   <Sparkles size={11} color="var(--accent-primary)" />
-                  <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{selectedModel}</span>
+                  <span style={{ fontWeight: 500, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
+                    {selectedModel}
+                  </span>
                   <ChevronDown size={11} color="var(--text-muted)" />
                 </button>
 
@@ -484,7 +524,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       position: 'absolute',
                       bottom: '28px',
                       left: 0,
-                      width: '200px',
+                      width: '240px',
                       backgroundColor: 'var(--bg-dropdown)',
                       border: '1px solid var(--border-subtle)',
                       borderRadius: 'var(--radius-md)',
@@ -509,7 +549,8 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                             borderRadius: 'var(--radius-sm)',
                             backgroundColor: isSelected ? 'var(--accent-subtle)' : 'transparent',
                             color: isSelected ? 'var(--text-accent)' : 'var(--text-secondary)',
-                            fontSize: '12px',
+                            fontSize: '11px',
+                            fontFamily: 'var(--font-mono)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
@@ -526,20 +567,40 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 )}
               </div>
 
-              {/* Send Button & Hint */}
+              {/* Action Buttons: Stop Generating or Send */}
               <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                  Enter to send
-                </span>
-                <Button
-                  variant="primary"
-                  size="sm"
-                  onClick={() => handleSend()}
-                  disabled={!replyText.trim() || isGenerating}
-                  icon={<ArrowUp size={13} />}
-                  style={{ width: '28px', height: '28px', padding: 0 }}
-                  title="Send message"
-                />
+                {isGenerating ? (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => taskStore.stopGenerating(task.id)}
+                    icon={<Square size={12} fill="currentColor" />}
+                    style={{
+                      color: 'var(--status-danger)',
+                      borderColor: 'rgba(239, 68, 68, 0.4)',
+                      backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                      gap: '5px',
+                    }}
+                    title="Stop Generating"
+                  >
+                    Stop Generating
+                  </Button>
+                ) : (
+                  <>
+                    <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                      Enter to send
+                    </span>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => handleSend()}
+                      disabled={!replyText.trim()}
+                      icon={<ArrowUp size={13} />}
+                      style={{ width: '28px', height: '28px', padding: 0 }}
+                      title="Send message"
+                    />
+                  </>
+                )}
               </div>
             </div>
           </div>
