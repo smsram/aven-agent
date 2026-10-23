@@ -1,9 +1,18 @@
-import { AgentTask, ChatMessage, TaskStatus } from '../types';
+import {
+  AgentTask,
+  ChatMessage,
+  TaskStatus,
+  ProcessStep,
+  MessageMetadata,
+  PersistedConversation,
+} from '../types';
 import {
   cloudflareService,
+  chatStorageService,
   ChatMessagePayload,
   StreamChunkPayload,
   StreamDonePayload,
+  ChatActivityStatusPayload,
   isTauriDesktop,
 } from './tauriIpc';
 import { listen } from '@tauri-apps/api/event';
@@ -11,13 +20,102 @@ import { listen } from '@tauri-apps/api/event';
 const SYSTEM_PROMPT =
   'You are Aven, a sophisticated engineering AI assistant. Provide concise, helpful, and well-structured answers using clean Markdown formatting.';
 
+function toPersistedConversation(task: AgentTask): PersistedConversation {
+  return {
+    id: task.id,
+    title: task.title,
+    prompt: task.prompt,
+    status: task.status,
+    created_at: task.createdAt,
+    completed_at: task.completedAt,
+    duration: task.duration,
+    model: task.model,
+    provider: task.provider,
+    output: task.output,
+    token_usage: task.tokenUsage,
+    logs: task.logs || [],
+    messages: (task.messages || []).map((m) => ({
+      id: m.id,
+      sender: m.sender,
+      text: m.text,
+      timestamp: m.timestamp,
+      status: m.status || (m.sender === 'user' ? 'done' : 'thinking'),
+      metadata: m.metadata,
+      process_steps: m.processSteps || m.process_steps || [],
+      logs: m.logs || [],
+    })),
+    updated_at: Date.now(),
+  };
+}
+
+function fromPersistedConversation(p: PersistedConversation): AgentTask {
+  return {
+    id: p.id,
+    title: p.title,
+    prompt: p.prompt,
+    status: (p.status as TaskStatus) || 'completed',
+    createdAt: p.created_at,
+    completedAt: p.completed_at,
+    duration: p.duration,
+    model: p.model,
+    provider: p.provider,
+    output: p.output,
+    tokenUsage: p.token_usage,
+    logs: p.logs || [],
+    messages: (p.messages || []).map((m) => {
+      const isInterrupted = m.status === 'interrupted' || (m.sender === 'assistant' && m.status === 'thinking');
+      const finalStatus = isInterrupted ? ('error' as const) : ((m.status as 'thinking' | 'done' | 'error' | 'interrupted') || 'done');
+      const processSteps = (m.process_steps || []).map((s) => ({
+        ...s,
+        status: isInterrupted && s.status === 'running' ? ('cancelled' as const) : s.status,
+      }));
+
+      return {
+        id: m.id,
+        sender: m.sender as 'user' | 'assistant',
+        text: m.text || (isInterrupted ? 'Generation was interrupted when the application was closed.' : ''),
+        timestamp: m.timestamp,
+        status: finalStatus,
+        metadata: m.metadata,
+        processSteps,
+        process_steps: processSteps,
+        logs: m.logs || [],
+      };
+    }),
+  };
+}
+
 class TaskStore {
   private tasks: AgentTask[] = [];
   private listeners: (() => void)[] = [];
   private isListening = false;
+  private isInitialized = false;
+  private activeTaskId: string | null = null;
+  private debounceSaveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private generationTimers = new Map<string, number>();
 
   constructor() {
     this.initEventListeners();
+  }
+
+  async initStore(): Promise<string | null> {
+    if (this.isInitialized) {
+      return this.activeTaskId;
+    }
+    this.isInitialized = true;
+
+    try {
+      const stored = await chatStorageService.loadConversations();
+      if (stored && stored.conversations && stored.conversations.length > 0) {
+        this.tasks = stored.conversations.map(fromPersistedConversation);
+      }
+      this.activeTaskId = null;
+      this.notify();
+      return null;
+    } catch (err) {
+      console.error('Failed to load persisted conversations on startup:', err);
+      return null;
+    }
   }
 
   private async initEventListeners() {
@@ -31,6 +129,10 @@ class TaskStore {
 
       await listen<StreamDonePayload>('chat-stream-done', (event) => {
         this.handleStreamDone(event.payload);
+      });
+
+      await listen<ChatActivityStatusPayload>('chat-activity-status', (event) => {
+        this.handleActivityStatus(event.payload);
       });
     } catch (err) {
       console.error('Failed to register Tauri chat stream listeners:', err);
@@ -49,17 +151,59 @@ class TaskStore {
     return this.tasks.find((t) => t.id === id);
   }
 
+  getActiveTaskId(): string | null {
+    return this.activeTaskId;
+  }
+
+  setActiveTaskId(id: string | null): void {
+    this.activeTaskId = id;
+    chatStorageService.saveActiveConversationId(id).catch((err) => {
+      console.error('Failed to save active conversation id:', err);
+    });
+  }
+
+  private persistTask(task: AgentTask): Promise<void> {
+    const persisted = toPersistedConversation(task);
+    return chatStorageService.saveConversation(persisted).catch((err) => {
+      console.error(`Failed to persist conversation [${task.id}]:`, err);
+    });
+  }
+
+  private scheduleDebouncedSave(task: AgentTask, delayMs = 400): void {
+    const existing = this.debounceSaveTimers.get(task.id);
+    if (existing) {
+      clearTimeout(existing);
+    }
+    const timer = setTimeout(() => {
+      this.debounceSaveTimers.delete(task.id);
+      this.persistTask(task);
+    }, delayMs);
+    this.debounceSaveTimers.set(task.id, timer);
+  }
+
+  private cancelDebouncedSave(taskId: string): void {
+    const timer = this.debounceSaveTimers.get(taskId);
+    if (timer) {
+      clearTimeout(timer);
+      this.debounceSaveTimers.delete(taskId);
+    }
+  }
+
   createTask(title: string, prompt: string, model: string, provider: string): AgentTask {
     const id = `tsk_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     const userMsgId = `msg_u_${Date.now()}`;
     const asstMsgId = `msg_a_${Date.now()}`;
 
+    // Record monotonic generation start time
+    this.generationTimers.set(asstMsgId, performance.now());
+
     const userMessage: ChatMessage = {
       id: userMsgId,
       sender: 'user',
       text: prompt,
       timestamp: nowTime,
+      status: 'done',
     };
 
     const assistantMessage: ChatMessage = {
@@ -68,6 +212,8 @@ class TaskStore {
       text: '',
       status: 'thinking',
       timestamp: nowTime,
+      processSteps: [],
+      process_steps: [],
       logs: [
         {
           timestamp: new Date().toLocaleTimeString(),
@@ -92,16 +238,15 @@ class TaskStore {
           message: `Stream initiated on ${model}`,
         },
       ],
-      tokenUsage: {
-        promptTokens: Math.floor(prompt.length * 0.75),
-        completionTokens: 0,
-        totalTokens: Math.floor(prompt.length * 0.75),
-      },
       messages: [userMessage, assistantMessage],
     };
 
     this.tasks = [newTask, ...this.tasks];
+    this.setActiveTaskId(id);
     this.notify();
+
+    // Persist immediately so prompt & initial state are saved
+    this.persistTask(newTask);
 
     // Start streaming request to Cloudflare Workers AI
     const messagesPayload: ChatMessagePayload[] = [
@@ -130,11 +275,15 @@ class TaskStore {
     const userMsgId = `msg_u_${Date.now()}`;
     const asstMsgId = `msg_a_${Date.now()}`;
 
+    // Record monotonic generation start time
+    this.generationTimers.set(asstMsgId, performance.now());
+
     const userMsg: ChatMessage = {
       id: userMsgId,
       sender: 'user',
       text,
       timestamp: nowTime,
+      status: 'done',
     };
 
     const asstMsg: ChatMessage = {
@@ -143,6 +292,8 @@ class TaskStore {
       text: '',
       status: 'thinking',
       timestamp: nowTime,
+      processSteps: [],
+      process_steps: [],
       logs: [
         {
           timestamp: new Date().toLocaleTimeString(),
@@ -152,7 +303,6 @@ class TaskStore {
       ],
     };
 
-    // Build multi-turn context (last 20 messages to keep bounds safe)
     const existingMessages = (task.messages || []).slice(-20);
     const historyPayload: ChatMessagePayload[] = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -168,18 +318,24 @@ class TaskStore {
     }
     historyPayload.push({ role: 'user', content: text });
 
+    let updatedTask: AgentTask | null = null;
     this.tasks = this.tasks.map((t) => {
       if (t.id === taskId) {
-        return {
+        updatedTask = {
           ...t,
           status: 'running',
           model,
           messages: [...(t.messages || []), userMsg, asstMsg],
         };
+        return updatedTask;
       }
       return t;
     });
+
     this.notify();
+    if (updatedTask) {
+      this.persistTask(updatedTask);
+    }
 
     cloudflareService.startChatStream(taskId, asstMsgId, historyPayload).catch((err) => {
       this.handleStreamDone({
@@ -199,7 +355,9 @@ class TaskStore {
     const asstIndex = task.messages.findIndex((m) => m.id === assistantMsgId);
     if (asstIndex === -1) return;
 
-    // Build context up to this assistant message
+    // Record monotonic generation start time
+    this.generationTimers.set(assistantMsgId, performance.now());
+
     const previousMessages = task.messages.slice(0, asstIndex);
     const historyPayload: ChatMessagePayload[] = [
       { role: 'system', content: SYSTEM_PROMPT },
@@ -214,7 +372,7 @@ class TaskStore {
       }
     }
 
-    // Reset this assistant message to thinking
+    let updatedTask: AgentTask | null = null;
     this.tasks = this.tasks.map((t) => {
       if (t.id === taskId) {
         const updated = (t.messages || []).map((m) => {
@@ -223,6 +381,9 @@ class TaskStore {
               ...m,
               text: '',
               status: 'thinking' as const,
+              processSteps: [],
+              process_steps: [],
+              activityStatus: undefined,
               logs: [
                 {
                   timestamp: new Date().toLocaleTimeString(),
@@ -234,11 +395,16 @@ class TaskStore {
           }
           return m;
         });
-        return { ...t, status: 'running' as TaskStatus, messages: updated };
+        updatedTask = { ...t, status: 'running' as TaskStatus, messages: updated };
+        return updatedTask;
       }
       return t;
     });
+
     this.notify();
+    if (updatedTask) {
+      this.persistTask(updatedTask);
+    }
 
     cloudflareService.startChatStream(taskId, assistantMsgId, historyPayload).catch((err) => {
       this.handleStreamDone({
@@ -253,14 +419,40 @@ class TaskStore {
 
   stopGenerating(taskId: string): void {
     cloudflareService.stopChatStream(taskId);
+    this.cancelDebouncedSave(taskId);
 
+    let updatedTask: AgentTask | null = null;
     this.tasks = this.tasks.map((t) => {
       if (t.id === taskId) {
         const updated = (t.messages || []).map((m) => {
           if (m.status === 'thinking') {
+            const start = this.generationTimers.get(m.id);
+            let durationMs: number | undefined;
+            let durationFormatted: string | undefined;
+            if (start !== undefined) {
+              durationMs = Math.round(performance.now() - start);
+              this.generationTimers.delete(m.id);
+              durationFormatted = `${(durationMs / 1000).toFixed(1)}s`;
+            }
+
+            const steps = (m.processSteps || m.process_steps || []).map((s) => ({
+              ...s,
+              status: s.status === 'running' ? ('cancelled' as const) : s.status,
+            }));
+
+            const metadata: MessageMetadata = {
+              model: t.model,
+              duration_ms: durationMs,
+              duration_formatted: durationFormatted,
+            };
+
             return {
               ...m,
               status: 'done' as const,
+              activityStatus: undefined,
+              processSteps: steps,
+              process_steps: steps,
+              metadata,
               logs: [
                 ...(m.logs || []),
                 {
@@ -274,25 +466,29 @@ class TaskStore {
           return m;
         });
 
-        return {
+        updatedTask = {
           ...t,
           status: 'completed' as TaskStatus,
           messages: updated,
         };
+        return updatedTask;
       }
       return t;
     });
+
     this.notify();
+    if (updatedTask) {
+      this.persistTask(updatedTask);
+    }
   }
 
   handleStreamChunk(payload: StreamChunkPayload): void {
-    let hasChanged = false;
+    let targetTask: AgentTask | null = null;
 
     this.tasks = this.tasks.map((t) => {
       if (t.id === payload.conversation_id) {
         const updatedMessages = (t.messages || []).map((m) => {
           if (m.id === payload.message_id) {
-            hasChanged = true;
             return {
               ...m,
               text: m.text + payload.chunk,
@@ -302,24 +498,129 @@ class TaskStore {
           return m;
         });
 
-        return {
+        targetTask = {
           ...t,
           output: updatedMessages[updatedMessages.length - 1]?.text || t.output,
           messages: updatedMessages,
         };
+        return targetTask;
       }
       return t;
     });
 
-    if (hasChanged) {
+    if (targetTask) {
       this.notify();
+      // Debounced write during streaming so partial generation is safely saved
+      this.scheduleDebouncedSave(targetTask);
+    }
+  }
+
+  handleActivityStatus(payload: ChatActivityStatusPayload): void {
+    let targetTask: AgentTask | null = null;
+
+    this.tasks = this.tasks.map((t) => {
+      if (t.id === payload.conversation_id) {
+        const updatedMessages = (t.messages || []).map((m) => {
+          if (m.id === payload.message_id) {
+            const currentSteps: ProcessStep[] = [...(m.processSteps || m.process_steps || [])];
+
+            if (payload.status === 'done') {
+              // Complete running steps
+              for (const s of currentSteps) {
+                if (s.status === 'running') {
+                  s.status = 'completed';
+                }
+              }
+            } else {
+              // Mark previous running steps as completed
+              for (const s of currentSteps) {
+                if (s.status === 'running' && s.label !== payload.description) {
+                  s.status = 'completed';
+                }
+              }
+
+              // Check if step with this description or tool_name exists
+              const existingIndex = currentSteps.findIndex(
+                (s) => s.label === payload.description || (payload.tool_name && s.tool_name === payload.tool_name)
+              );
+
+              if (existingIndex >= 0) {
+                currentSteps[existingIndex] = {
+                  ...currentSteps[existingIndex],
+                  status: 'running',
+                  integration_id: payload.integration_id || currentSteps[existingIndex].integration_id,
+                  tool_name: payload.tool_name || currentSteps[existingIndex].tool_name,
+                };
+              } else if (payload.description) {
+                currentSteps.push({
+                  id: `step_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+                  label: payload.description,
+                  status: 'running',
+                  integration_id: payload.integration_id,
+                  tool_name: payload.tool_name,
+                  timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+                });
+              }
+            }
+
+            const newLogs = m.logs ? [...m.logs] : [];
+            if (payload.description && !newLogs.some((l) => l.message === payload.description)) {
+              newLogs.push({
+                timestamp: new Date().toLocaleTimeString(),
+                level: 'info' as const,
+                message: payload.description,
+              });
+            }
+
+            return {
+              ...m,
+              activityStatus:
+                payload.status === 'done'
+                  ? undefined
+                  : {
+                      status: payload.status,
+                      description: payload.description,
+                      integration_id: payload.integration_id,
+                      tool_name: payload.tool_name,
+                    },
+              processSteps: currentSteps,
+              process_steps: currentSteps,
+              logs: newLogs,
+            };
+          }
+          return m;
+        });
+
+        targetTask = {
+          ...t,
+          messages: updatedMessages,
+        };
+        return targetTask;
+      }
+      return t;
+    });
+
+    if (targetTask) {
+      this.notify();
+      this.scheduleDebouncedSave(targetTask);
     }
   }
 
   handleStreamDone(payload: StreamDonePayload): void {
     const isError = Boolean(payload.error);
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    this.cancelDebouncedSave(payload.conversation_id);
 
+    const start = this.generationTimers.get(payload.message_id);
+    let durationMs: number | undefined;
+    let durationFormatted: string | undefined;
+    if (start !== undefined) {
+      durationMs = Math.round(performance.now() - start);
+      this.generationTimers.delete(payload.message_id);
+      durationFormatted = `${(durationMs / 1000).toFixed(1)}s`;
+    }
+
+    let targetTask: AgentTask | null = null;
     this.tasks = this.tasks.map((t) => {
       if (t.id === payload.conversation_id) {
         const updatedMessages = (t.messages || []).map((m) => {
@@ -336,10 +637,31 @@ class TaskStore {
                 ]
               : m.logs;
 
+            // Finalize process steps
+            const finalizedSteps = (m.processSteps || m.process_steps || []).map((s) => ({
+              ...s,
+              status: s.status === 'running' ? (isError ? ('failed' as const) : ('completed' as const)) : s.status,
+              error: (s.status === 'running' && isError ? payload.error : s.error) || undefined,
+            }));
+
+            // Only capture real provider usage and measured monotonic timing
+            const metadata: MessageMetadata = {
+              model: t.model,
+              prompt_tokens: payload.prompt_tokens ?? undefined,
+              completion_tokens: payload.completion_tokens ?? undefined,
+              total_tokens: payload.total_tokens ?? undefined,
+              duration_ms: durationMs,
+              duration_formatted: durationFormatted,
+            };
+
             return {
               ...m,
               text: payload.full_text || m.text,
               status: finalStatus,
+              activityStatus: undefined,
+              processSteps: finalizedSteps,
+              process_steps: finalizedSteps,
+              metadata,
               timestamp: nowTime,
               logs: errorLogs,
             };
@@ -348,41 +670,76 @@ class TaskStore {
         });
 
         const activeMsg = updatedMessages.find((m) => m.id === payload.message_id);
-        const completionLength = (activeMsg?.text || '').length;
+        const tokenUsage = payload.total_tokens
+          ? {
+              promptTokens: payload.prompt_tokens || 0,
+              completionTokens: payload.completion_tokens || 0,
+              totalTokens: payload.total_tokens,
+            }
+          : undefined;
 
-        const promptTokens =
-          payload.prompt_tokens ?? t.tokenUsage?.promptTokens ?? Math.max(1, Math.floor((t.prompt || '').length * 0.75));
-        const completionTokens =
-          payload.completion_tokens ?? Math.max(1, Math.floor(completionLength * 0.75));
-        const totalTokens = payload.total_tokens ?? (promptTokens + completionTokens);
-
-        return {
+        const updatedTask: AgentTask = {
           ...t,
           status: isError && !activeMsg?.text ? ('failed' as TaskStatus) : ('completed' as TaskStatus),
           completedAt: 'Just now',
+          duration: durationFormatted || t.duration,
           output: activeMsg?.text || t.output,
           messages: updatedMessages,
-          tokenUsage: {
-            promptTokens,
-            completionTokens,
-            totalTokens,
-          },
+          tokenUsage,
         };
+        targetTask = updatedTask;
+        return updatedTask;
+      }
+      return t;
+    });
+
+
+    this.notify();
+    if (targetTask) {
+      this.persistTask(targetTask);
+    }
+  }
+
+  renameTask(id: string, newTitle: string): void {
+    const trimmed = newTitle.trim();
+    if (!trimmed) return;
+
+    let targetTask: AgentTask | null = null;
+    this.tasks = this.tasks.map((t) => {
+      if (t.id === id) {
+        targetTask = { ...t, title: trimmed };
+        return targetTask;
       }
       return t;
     });
 
     this.notify();
+    if (targetTask) {
+      this.persistTask(targetTask);
+      chatStorageService.renameConversation(id, trimmed).catch((err) => {
+        console.error(`Failed to rename conversation [${id}]:`, err);
+      });
+    }
   }
 
   deleteTask(id: string): void {
     this.tasks = this.tasks.filter((t) => t.id !== id);
+    if (this.activeTaskId === id) {
+      this.setActiveTaskId(this.tasks[0]?.id || null);
+    }
     this.notify();
+    chatStorageService.deleteConversation(id).catch((err) => {
+      console.error(`Failed to delete conversation [${id}]:`, err);
+    });
   }
 
   clearAllTasks(): void {
     this.tasks = [];
+    this.setActiveTaskId(null);
     this.notify();
+    chatStorageService.clearAllConversations().catch((err) => {
+      console.error('Failed to clear all conversations:', err);
+    });
   }
 
   subscribe(listener: () => void): () => void {

@@ -124,3 +124,323 @@ input::placeholder, textarea::placeholder {
 .mono {
   font-family: var(--font-mono);
 }
+
+/* Shimmering text effect for active agent operations */
+@keyframes aven-shimmer {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.aven-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    var(--text-secondary) 0%,
+    var(--text-primary) 35%,
+    var(--accent-primary) 50%,
+    var(--text-primary) 65%,
+    var(--text-secondary) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: aven-shimmer 2.4s ease-in-out infinite;
+  display: inline-block;
+}
+
+@keyframes aven-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.aven-spinner {
+  animation: aven-spin 0.9s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aven-shimmer-text {
+    animation: none;
+    background: none;
+    -webkit-background-clip: initial;
+    -webkit-text-fill-color: initial;
+    color: var(--accent-primary);
+  }
+  .aven-spinner {
+    animation: none;
+  }
+}
+
+/* ==========================================================================
+   Markdown Prose, Tables, Lists, and Code Styling (Vanilla CSS)
+   ========================================================================== */
+
+.aven-markdown-content {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--text-primary);
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Paragraphs & Headings */
+.aven-markdown-content p {
+  margin: 8px 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.aven-markdown-content p:first-child {
+  margin-top: 0;
+}
+.aven-markdown-content p:last-child {
+  margin-bottom: 0;
+}
+
+.aven-markdown-content h1,
+.aven-markdown-content h2,
+.aven-markdown-content h3,
+.aven-markdown-content h4,
+.aven-markdown-content h5,
+.aven-markdown-content h6 {
+  color: #F4F4F5;
+  font-weight: 600;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.aven-markdown-content h1 {
+  font-size: 17px;
+  margin: 16px 0 8px 0;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(52, 53, 60, 0.6);
+}
+.aven-markdown-content h2 {
+  font-size: 15px;
+  margin: 14px 0 6px 0;
+  padding-bottom: 3px;
+  border-bottom: 1px solid rgba(52, 53, 60, 0.4);
+}
+.aven-markdown-content h3 {
+  font-size: 14px;
+  margin: 12px 0 4px 0;
+}
+.aven-markdown-content h4 {
+  font-size: 13px;
+  margin: 10px 0 4px 0;
+}
+
+/* Links */
+.aven-markdown-content a {
+  color: var(--accent-primary);
+  text-decoration: underline;
+  text-underline-offset: 2.5px;
+  cursor: pointer;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.aven-markdown-content a:hover {
+  color: var(--accent-primary-hover);
+}
+
+/* Lists - Ordered, Unordered, and Nested Lists */
+.aven-markdown-content ul {
+  list-style-type: disc;
+  margin: 8px 0;
+  padding-left: 22px;
+  min-width: 0;
+}
+.aven-markdown-content ol {
+  list-style-type: decimal;
+  margin: 8px 0;
+  padding-left: 22px;
+  min-width: 0;
+}
+.aven-markdown-content li {
+  margin: 4px 0;
+  padding-left: 3px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.aven-markdown-content li::marker {
+  color: var(--text-muted);
+}
+/* Nested lists */
+.aven-markdown-content ul ul {
+  list-style-type: circle;
+  margin: 2px 0;
+  padding-left: 18px;
+}
+.aven-markdown-content ul ul ul {
+  list-style-type: square;
+  margin: 2px 0;
+  padding-left: 18px;
+}
+.aven-markdown-content ol ol {
+  list-style-type: lower-alpha;
+  margin: 2px 0;
+  padding-left: 18px;
+}
+.aven-markdown-content ol ol ol {
+  list-style-type: lower-roman;
+  margin: 2px 0;
+  padding-left: 18px;
+}
+.aven-markdown-content ul ol,
+.aven-markdown-content ol ul {
+  margin: 2px 0;
+  padding-left: 18px;
+}
+
+/* Blockquotes */
+.aven-markdown-content blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--accent-primary);
+  color: var(--text-secondary);
+  font-style: italic;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Tables - Responsive, Beautifully Aligned, Clear Headers and Borders */
+.aven-table-wrapper {
+  margin: 12px 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border: 1px solid #34353C;
+  border-radius: var(--radius-md);
+  background-color: #1A1B20;
+}
+.aven-markdown-content table {
+  width: 100%;
+  min-width: 320px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+  line-height: 1.5;
+  text-align: left;
+}
+.aven-markdown-content thead {
+  background-color: #24252C;
+  border-bottom: 1.5px solid #383942;
+}
+.aven-markdown-content th {
+  padding: 8px 14px;
+  font-weight: 600;
+  color: #F4F4F5;
+  border-right: 1px solid #34353C;
+  text-align: left;
+  white-space: nowrap;
+}
+.aven-markdown-content th:last-child {
+  border-right: none;
+}
+.aven-markdown-content tbody tr {
+  border-bottom: 1px solid #2B2C33;
+}
+.aven-markdown-content tbody tr:last-child {
+  border-bottom: none;
+}
+.aven-markdown-content tbody tr:hover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+.aven-markdown-content td {
+  padding: 8px 14px;
+  color: #D6D6DD;
+  border-right: 1px solid #2B2C33;
+  vertical-align: top;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.aven-markdown-content td:last-child {
+  border-right: none;
+}
+
+/* Inline code */
+.aven-markdown-content code:not(pre code) {
+  padding: 1.5px 5px;
+  border-radius: var(--radius-sm);
+  background-color: #202127;
+  border: 1px solid #34353C;
+  color: #E2E2E8;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+/* Fenced Code Block Wrapper */
+.aven-codeblock-wrapper {
+  margin: 12px 0;
+  border-radius: var(--radius-md);
+  border: 1px solid #34353C;
+  background-color: #1E1F24;
+  overflow: hidden;
+  max-width: 100%;
+  min-width: 0;
+  font-size: 12px;
+}
+.aven-codeblock-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 12px;
+  background-color: #25262C;
+  border-bottom: 1px solid #34353C;
+  color: #A5A6B0;
+}
+.aven-codeblock-content {
+  overflow-x: auto;
+  max-width: 100%;
+  padding: 12px;
+  color: #F4F4F5;
+  font-family: var(--font-mono);
+  line-height: 1.55;
+  user-select: text;
+}
+.aven-codeblock-content pre {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre;
+}
+
+/* Blinking AI typing cursor: vertical bar | immediately after content */
+.aven-typing-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 1.15em;
+  background-color: var(--accent-primary);
+  margin-left: 2px;
+  vertical-align: -0.15em;
+  border-radius: 1px;
+  animation: aven-cursor-blink 0.9s infinite;
+}
+
+@keyframes aven-cursor-blink {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aven-typing-cursor {
+    animation: none;
+    opacity: 1;
+  }
+}
+

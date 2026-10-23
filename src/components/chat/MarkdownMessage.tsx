@@ -13,9 +13,10 @@ interface MarkdownMessageProps {
 interface CodeBlockProps {
   language?: string;
   code: string;
+  isStreaming?: boolean;
 }
 
-const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
+const CodeBlock: React.FC<CodeBlockProps> = ({ language, code, isStreaming }) => {
   const [copied, setCopied] = useState(false);
 
   const handleCopy = async () => {
@@ -31,43 +32,133 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, code }) => {
   const displayLanguage = language ? language.replace(/^language-/, '') : 'text';
 
   return (
-    <div className="aven-codeblock-wrapper my-3 rounded-md border border-[#34353C] bg-[#1E1F24] overflow-hidden text-xs">
-      <div className="flex items-center justify-between px-3 py-1.5 bg-[#25262C] border-b border-[#34353C] text-[#A5A6B0]">
-        <span className="font-mono text-[11px] uppercase tracking-wider">{displayLanguage}</span>
+    <div className="aven-codeblock-wrapper">
+      <div className="aven-codeblock-header">
+        <span style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          {displayLanguage}
+        </span>
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 px-2 py-0.5 rounded text-[11px] text-[#A5A6B0] hover:text-[#F4F4F5] hover:bg-[#34353C] transition-colors"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '5px',
+            padding: '2px 6px',
+            borderRadius: 'var(--radius-sm)',
+            fontSize: '11px',
+            color: copied ? 'var(--status-success)' : 'var(--text-secondary)',
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+          }}
           title="Copy code"
           type="button"
         >
           {copied ? (
             <>
-              <Check className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="text-emerald-400">Copied</span>
+              <Check size={12} color="var(--status-success)" />
+              <span style={{ color: 'var(--status-success)' }}>Copied</span>
             </>
           ) : (
             <>
-              <Copy className="w-3.5 h-3.5" />
+              <Copy size={12} />
               <span>Copy</span>
             </>
           )}
         </button>
       </div>
-      <div className="overflow-x-auto p-3 text-[#F4F4F5] font-mono leading-relaxed select-text">
-        <pre className="m-0 p-0 font-mono text-[12px] whitespace-pre">
+      <div className="aven-codeblock-content">
+        <pre>
           <code>{code}</code>
+          {isStreaming && <span className="aven-typing-cursor" aria-hidden="true" />}
         </pre>
       </div>
     </div>
   );
 };
 
+/**
+ * Preprocesses streaming markdown text to avoid exposing incomplete syntax
+ * like dangling `[`, `[Label](`, or unclosed `[Label](url...` without `)`.
+ */
+export function preprocessStreamingMarkdown(raw: string, isStreaming?: boolean): string {
+  if (!raw) return '';
+  if (!isStreaming) return raw;
+
+  let text = raw;
+
+  // 1. If text ends with an unclosed link like `[Label](https://domain.com/path` (missing `)`)
+  // Temporarily close with `)` so ReactMarkdown renders it as a valid link instead of raw syntax
+  const unclosedLinkMatch = /\[([^\]]+)\]\((https?:\/\/[^\s\)]*)$/.exec(text);
+  if (unclosedLinkMatch) {
+    text = `${text})`;
+  } else {
+    // 2. If text ends with `[Label](` without any URL yet
+    const unstartedUrlMatch = /\[([^\]]+)\]\($/.exec(text);
+    if (unstartedUrlMatch) {
+      // Just render the label text safely without raw bracket delimiters
+      text = text.slice(0, unstartedUrlMatch.index) + unstartedUrlMatch[1];
+    } else {
+      // 3. If text ends with dangling `[`
+      if (text.endsWith('[')) {
+        text = text.slice(0, -1);
+      }
+    }
+  }
+
+  return text;
+}
+
+/**
+ * Remark plugin that inserts a blinking typing cursor into the last leaf container element
+ * (paragraph, list item, table cell, etc.) during active token streaming.
+ */
+function remarkCursorPlugin() {
+  return (tree: any) => {
+    function findLast(n: any): any {
+      if (!n || !n.children || !Array.isArray(n.children) || n.children.length === 0) return n;
+      return findLast(n.children[n.children.length - 1]);
+    }
+
+    const lastLeaf = findLast(tree);
+    // If the last leaf is a code block, CodeBlock handles the cursor internally within pre/code
+    if (lastLeaf && lastLeaf.type === 'code') {
+      return;
+    }
+
+    function findLastContainer(n: any): any {
+      if (!n || !n.children || !Array.isArray(n.children) || n.children.length === 0) return null;
+      const last = n.children[n.children.length - 1];
+      if (last && last.children && Array.isArray(last.children) && last.children.length > 0) {
+        return findLastContainer(last) || last;
+      }
+      return n;
+    }
+
+    const lastParent = findLastContainer(tree);
+    if (lastParent && Array.isArray(lastParent.children)) {
+      lastParent.children.push({
+        type: 'span',
+        data: {
+          hName: 'span',
+          hProperties: {
+            className: 'aven-typing-cursor',
+            'aria-hidden': 'true',
+          },
+        },
+      });
+    }
+  };
+}
+
 export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStreaming }) => {
+  const safeContent = preprocessStreamingMarkdown(content, isStreaming);
+
   const handleOpenLink = async (e: React.MouseEvent<HTMLAnchorElement>, href?: string) => {
     e.preventDefault();
     if (!href) return;
 
-    // Safety check: only allow http and https protocols
+    // Safety check: only allow http: and https: protocols
     try {
       const url = new URL(href);
       if (url.protocol !== 'http:' && url.protocol !== 'https:') {
@@ -85,10 +176,12 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
     }
   };
 
+  const plugins = isStreaming ? [remarkGfm, remarkCursorPlugin] : [remarkGfm];
+
   return (
-    <div className="aven-markdown-content text-[13.5px] leading-relaxed text-[#E2E2E8]">
+    <div className="aven-markdown-content">
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={plugins}
         components={{
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '');
@@ -96,111 +189,96 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
             const isMultiline = codeString.includes('\n') || Boolean(match);
 
             if (isMultiline) {
-              return <CodeBlock language={match ? match[1] : undefined} code={codeString} />;
+              return (
+                <CodeBlock
+                  language={match ? match[1] : undefined}
+                  code={codeString}
+                  isStreaming={isStreaming}
+                />
+              );
             }
 
             return (
-              <code
-                className="px-1.5 py-0.5 rounded bg-[#202127] border border-[#34353C] text-[#E2E2E8] font-mono text-[12px]"
-                {...props}
-              >
+              <code {...props}>
                 {children}
               </code>
             );
           },
           a({ href, children, ...props }) {
+            // Guarantee we never show empty link syntax `[]`
+            const linkText = children && String(children).trim().length > 0 ? children : href || 'Link';
             return (
               <a
                 href={href}
                 onClick={(e) => handleOpenLink(e, href)}
-                className="inline-flex items-center gap-0.5 text-[#7C7CF8] hover:underline underline-offset-2 font-medium cursor-pointer"
+                className="inline-flex items-center gap-0.5"
                 title={href}
                 rel="noopener noreferrer"
                 {...props}
               >
-                <span>{children}</span>
-                <ExternalLink className="w-3 h-3 inline-block opacity-70" />
+                <span>{linkText}</span>
+                <ExternalLink size={12} style={{ display: 'inline-block', opacity: 0.7, flexShrink: 0, marginLeft: '2px' }} />
               </a>
             );
           },
           table({ children }) {
             return (
-              <div className="aven-table-wrapper my-3 overflow-x-auto rounded border border-[#34353C]">
-                <table className="w-full text-left border-collapse text-xs text-[#E2E2E8]">
+              <div className="aven-table-wrapper">
+                <table>
                   {children}
                 </table>
               </div>
             );
           },
           thead({ children }) {
-            return <thead className="bg-[#25262C] border-b border-[#34353C]">{children}</thead>;
+            return <thead>{children}</thead>;
+          },
+          tbody({ children }) {
+            return <tbody>{children}</tbody>;
+          },
+          tr({ children }) {
+            return <tr>{children}</tr>;
           },
           th({ children }) {
-            return (
-              <th className="px-3 py-2 font-semibold text-[#F4F4F5] border-r border-[#34353C] last:border-r-0">
-                {children}
-              </th>
-            );
+            return <th>{children}</th>;
           },
           td({ children }) {
-            return (
-              <td className="px-3 py-2 border-t border-r border-[#34353C] last:border-r-0">
-                {children}
-              </td>
-            );
+            return <td>{children}</td>;
           },
           blockquote({ children }) {
-            return (
-              <blockquote className="my-2.5 pl-3.5 border-l-2 border-[#7C7CF8] text-[#A5A6B0] italic">
-                {children}
-              </blockquote>
-            );
+            return <blockquote>{children}</blockquote>;
           },
           h1({ children }) {
-            return (
-              <h1 className="text-lg font-semibold text-[#F4F4F5] mt-4 mb-2 pb-1 border-b border-[#34353C]/60">
-                {children}
-              </h1>
-            );
+            return <h1>{children}</h1>;
           },
           h2({ children }) {
-            return (
-              <h2 className="text-base font-semibold text-[#F4F4F5] mt-3 mb-1.5 pb-0.5 border-b border-[#34353C]/40">
-                {children}
-              </h2>
-            );
+            return <h2>{children}</h2>;
           },
           h3({ children }) {
-            return <h3 className="text-sm font-semibold text-[#F4F4F5] mt-2.5 mb-1">{children}</h3>;
+            return <h3>{children}</h3>;
           },
           h4({ children }) {
-            return <h4 className="text-xs font-semibold text-[#F4F4F5] mt-2 mb-1">{children}</h4>;
+            return <h4>{children}</h4>;
           },
           ul({ children }) {
-            return <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>;
+            return <ul>{children}</ul>;
           },
           ol({ children }) {
-            return <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>;
+            return <ol>{children}</ol>;
           },
           li({ children }) {
-            return <li className="pl-0.5">{children}</li>;
+            return <li>{children}</li>;
           },
           p({ children }) {
-            return <p className="my-1.5 last:mb-0 first:mt-0">{children}</p>;
+            return <p>{children}</p>;
           },
           hr() {
-            return <hr className="my-3 border-[#34353C]" />;
+            return <hr style={{ margin: '14px 0', border: 'none', borderTop: '1px solid var(--border-subtle)' }} />;
           },
         }}
       >
-        {content}
+        {safeContent}
       </ReactMarkdown>
-      {isStreaming && (
-        <span
-          className="inline-block w-1.5 h-4 ml-1 bg-[#7C7CF8] align-middle animate-pulse rounded-sm"
-          aria-label="Generating response"
-        />
-      )}
     </div>
   );
 };

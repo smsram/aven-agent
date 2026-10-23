@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
-import { NavigationTab, AgentTask, AppSettings, McpPlugin } from './types';
+import { NavigationTab, AgentTask, AppSettings } from './types';
 import { taskStore } from './services/taskStore';
-import { pluginStore } from './services/pluginStore';
 import { secureStore } from './services/tauriIpc';
 import { Sidebar } from './components/layout/Sidebar';
 import { TopBar } from './components/layout/TopBar';
@@ -55,7 +54,6 @@ export function App() {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [tasks, setTasks] = useState<AgentTask[]>(taskStore.getTasks());
-  const [plugins, setPlugins] = useState<McpPlugin[]>(pluginStore.getPlugins());
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const [showCommandPalette, setShowCommandPalette] = useState(false);
 
@@ -67,13 +65,11 @@ export function App() {
     return unsubscribe;
   }, []);
 
-  // Subscribe to plugin store
+  // Load persistent conversations from Tauri backend on startup without opening recent chat
   useEffect(() => {
-    const unsubscribe = pluginStore.subscribe(() => {
-      setPlugins(pluginStore.getPlugins());
-    });
-    return unsubscribe;
+    taskStore.initStore();
   }, []);
+
 
   // Load persistent settings from Tauri backend
   useEffect(() => {
@@ -103,6 +99,7 @@ export function App() {
       if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
         if (e.key === '1') {
           e.preventDefault();
+          taskStore.setActiveTaskId(null);
           setActiveConversationId(null);
           setActiveTab('new-chat');
         } else if (e.key === '2') {
@@ -125,6 +122,7 @@ export function App() {
   const handleCreateTask = (prompt: string, model: string) => {
     const provider = 'Cloudflare Workers AI';
     const newTask = taskStore.createTask('', prompt, model, provider);
+    taskStore.setActiveTaskId(newTask.id);
     setActiveConversationId(newTask.id);
     setActiveTab('new-chat');
   };
@@ -136,11 +134,13 @@ export function App() {
   };
 
   const handleSelectRecentTask = (task: AgentTask) => {
+    taskStore.setActiveTaskId(task.id);
     setActiveConversationId(task.id);
     setActiveTab('new-chat');
   };
 
   const handleNewChat = () => {
+    taskStore.setActiveTaskId(null);
     setActiveConversationId(null);
     setActiveTab('new-chat');
   };
@@ -148,6 +148,7 @@ export function App() {
   const activeTask = activeConversationId
     ? tasks.find((t) => t.id === activeConversationId) || null
     : null;
+
 
   return (
     <div
@@ -221,12 +222,7 @@ export function App() {
               onSelectTask={handleSelectRecentTask}
             />
           ) : (
-            <PluginsPage
-              plugins={plugins}
-              onAddPlugin={(plugin) => pluginStore.addPlugin(plugin)}
-              onTogglePlugin={(id) => pluginStore.togglePlugin(id)}
-              onDeletePlugin={(id) => pluginStore.deletePlugin(id)}
-            />
+            <PluginsPage />
           )}
         </main>
       </div>

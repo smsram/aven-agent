@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { Plug2, Key, RefreshCw, Cpu, Terminal, GitBranch, MessageSquare } from 'lucide-react';
+import { Plug2, MessageSquare, Terminal, RefreshCw, Cpu, Key } from 'lucide-react';
 import { ModelProvider, Integration } from '../../types';
 import { Badge } from '../../components/common/Badge';
 import { Button } from '../../components/common/Button';
 import { Card } from '../../components/common/Card';
 import { ConfigureKeyModal } from './ConfigureKeyModal';
+import { IntegrationIcon } from '../../components/icons/IntegrationIcon';
 
 export interface ConnectionsPageProps {
   providers: ModelProvider[];
@@ -38,7 +39,7 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({
   const getIntegrationIcon = (id: string) => {
     switch (id) {
       case 'github':
-        return <GitBranch size={18} color="var(--accent-primary)" />;
+        return <IntegrationIcon id="github" name="GitHub" size={18} />;
       case 'linear':
         return (
           <div
@@ -64,7 +65,7 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({
         return <Terminal size={18} color="var(--status-success)" />;
       case 'jira':
       default:
-        return <Plug2 size={18} color="var(--text-muted)" />;
+        return <IntegrationIcon id={id} size={18} />;
     }
   };
 

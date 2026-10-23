@@ -67,8 +67,9 @@ export const TaskInput: React.FC<TaskInputProps> = ({
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         onKeyDown={handleKeyDown}
-        placeholder="Ask Cloudflare Workers AI... (Enter to send, Shift+Enter for new line)"
+        placeholder="Ask Aven anything..."
         rows={3}
+        aria-label="Ask Aven anything"
         style={{
           width: '100%',
           backgroundColor: 'transparent',
@@ -182,9 +183,6 @@ export const TaskInput: React.FC<TaskInputProps> = ({
 
         {/* Primary Action Button */}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-            Enter to run
-          </span>
           <Button
             variant="primary"
             size="md"
@@ -197,6 +195,7 @@ export const TaskInput: React.FC<TaskInputProps> = ({
           </Button>
         </div>
       </div>
+
     </div>
   );
 };

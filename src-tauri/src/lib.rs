@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tauri::Manager;
 
 pub mod cloudflare;
+pub mod plugins;
+pub mod storage;
 
 const SERVICE_NAME: &str = "com.aven.agent";
 
@@ -129,17 +131,29 @@ fn close_window(window: tauri::Window) -> Result<(), String> {
 pub fn run() {
     let initial_pairs = cloudflare::load_credentials_from_keyring().unwrap_or_default();
     let cloudflare_state = Arc::new(cloudflare::CloudflareState::new(initial_pairs));
+    let plugins_manager = Arc::new(plugins::PluginsManager::new("d:\\Projects\\Desktop\\Aven Agent".to_string()));
+    let storage_state = Arc::new(storage::ChatStorageState::new());
+
+    let pm_clone = Arc::clone(&plugins_manager);
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(cloudflare_state)
-        .setup(|app| {
+        .manage(plugins_manager)
+        .manage(storage_state)
+        .setup(move |app| {
             let icon_bytes = include_bytes!("../icons/icon.png");
             if let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_icon(icon);
                 }
             }
+
+            let handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                pm_clone.load_configs_from_disk(&handle).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -159,7 +173,20 @@ pub fn run() {
             cloudflare::test_cloudflare_credentials,
             cloudflare::clear_cloudflare_credentials,
             cloudflare::start_chat_stream,
-            cloudflare::stop_chat_stream
+            cloudflare::stop_chat_stream,
+            plugins::get_plugins_state,
+            plugins::save_plugin_config,
+            plugins::delete_plugin_config,
+            plugins::test_plugin_connection,
+            plugins::connect_plugin,
+            plugins::disconnect_plugin,
+            plugins::execute_capability,
+            storage::load_conversations,
+            storage::save_conversation,
+            storage::delete_conversation,
+            storage::rename_conversation,
+            storage::save_active_conversation_id,
+            storage::clear_all_conversations
         ])
         .run(tauri::generate_context!())
         .expect("error while running Aven desktop application");

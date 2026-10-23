@@ -1,72 +1,123 @@
-import { McpPlugin } from '../types';
-
-const STORAGE_KEY = 'aven_mcp_plugins';
+import {
+  CatalogEntry,
+  PluginMetadata,
+  PluginConfig,
+  RegisteredCapability,
+  TestConnectionResult,
+  CapabilityExecutionRequest,
+  CapabilityExecutionResult,
+} from '../types';
+import { pluginsService, isTauriDesktop } from './tauriIpc';
+import { listen } from '@tauri-apps/api/event';
 
 class PluginStore {
-  private plugins: McpPlugin[] = [];
+  private catalog: CatalogEntry[] = [];
+  private plugins: PluginMetadata[] = [];
+  private capabilities: RegisteredCapability[] = [];
+  private systemInfo: Record<string, unknown> = {};
+  private loading = false;
+  private error: string | null = null;
   private listeners: (() => void)[] = [];
+  private isListening = false;
 
   constructor() {
-    this.loadFromStorage();
+    this.refresh();
+    this.initTauriListener();
   }
 
-  private loadFromStorage() {
+  private async initTauriListener() {
+    if (this.isListening || !isTauriDesktop()) return;
+    this.isListening = true;
     try {
-      const saved = localStorage.getItem(STORAGE_KEY);
-      if (saved) {
-        this.plugins = JSON.parse(saved);
-      } else {
-        // Start with a clean empty state as requested: no fabricated connected plugins
-        this.plugins = [];
-      }
-    } catch {
-      this.plugins = [];
+      await listen('plugins-state-changed', () => {
+        this.refresh();
+      });
+    } catch (err) {
+      console.error('Failed to listen for plugins-state-changed event:', err);
     }
   }
 
-  private saveToStorage() {
+  async refresh(): Promise<void> {
+    this.loading = true;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.plugins));
-    } catch {
-      // ignore
+      const state = await pluginsService.getPluginsState();
+      this.catalog = state.catalog || [];
+      this.plugins = state.configured_plugins || [];
+      this.capabilities = state.capabilities || [];
+      this.systemInfo = state.system_info || {};
+      this.error = null;
+    } catch (err) {
+      console.error('Failed to load plugins state from backend:', err);
+      this.error = String(err);
+    } finally {
+      this.loading = false;
+      this.notify();
     }
   }
 
-  getPlugins(): McpPlugin[] {
+  getCatalog(): CatalogEntry[] {
+    return [...this.catalog];
+  }
+
+  getPlugins(): PluginMetadata[] {
     return [...this.plugins];
   }
 
-  addPlugin(plugin: Omit<McpPlugin, 'id' | 'createdAt' | 'status'>): McpPlugin {
-    const newPlugin: McpPlugin = {
-      ...plugin,
-      id: `mcp_${Date.now().toString(36)}`,
-      createdAt: 'Just now',
-      status: 'active',
-    };
-    this.plugins = [newPlugin, ...this.plugins];
-    this.saveToStorage();
-    this.notify();
-    return newPlugin;
+  getPluginById(id: string): PluginMetadata | undefined {
+    return this.plugins.find((p) => p.id === id);
   }
 
-  togglePlugin(id: string) {
-    this.plugins = this.plugins.map((p) => {
-      if (p.id === id) {
-        return {
-          ...p,
-          status: p.status === 'active' ? 'disabled' : 'active',
-        };
-      }
-      return p;
-    });
-    this.saveToStorage();
-    this.notify();
+  getCatalogEntryById(id: string): CatalogEntry | undefined {
+    return this.catalog.find((c) => c.id === id);
   }
 
-  deletePlugin(id: string) {
-    this.plugins = this.plugins.filter((p) => p.id !== id);
-    this.saveToStorage();
-    this.notify();
+  getCapabilities(): RegisteredCapability[] {
+    return [...this.capabilities];
+  }
+
+  getSystemInfo(): Record<string, unknown> {
+    return { ...this.systemInfo };
+  }
+
+  isLoading(): boolean {
+    return this.loading;
+  }
+
+  getError(): string | null {
+    return this.error;
+  }
+
+  async savePlugin(config: PluginConfig, secretKey?: string): Promise<PluginMetadata> {
+    const updated = await pluginsService.savePluginConfig(config, secretKey);
+    await this.refresh();
+    return updated;
+  }
+
+  async deletePlugin(id: string): Promise<void> {
+    await pluginsService.deletePluginConfig(id);
+    await this.refresh();
+  }
+
+  async testConnection(id: string): Promise<TestConnectionResult> {
+    return await pluginsService.testPluginConnection(id);
+  }
+
+  async connect(id: string): Promise<PluginMetadata> {
+    const updated = await pluginsService.connectPlugin(id);
+    await this.refresh();
+    return updated;
+  }
+
+  async disconnect(id: string): Promise<PluginMetadata> {
+    const updated = await pluginsService.disconnectPlugin(id);
+    await this.refresh();
+    return updated;
+  }
+
+  async executeCapability(
+    request: CapabilityExecutionRequest
+  ): Promise<CapabilityExecutionResult> {
+    return await pluginsService.executeCapability(request);
   }
 
   subscribe(listener: () => void): () => void {

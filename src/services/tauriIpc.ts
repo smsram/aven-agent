@@ -181,6 +181,16 @@ export interface StreamDonePayload {
   total_tokens?: number | null;
 }
 
+export interface ChatActivityStatusPayload {
+  conversation_id: string;
+  message_id: string;
+  status: 'searching' | 'synthesizing' | 'tool_running' | 'done';
+  description: string;
+  integration_id?: string;
+  tool_name?: string;
+}
+
+
 export const cloudflareService = {
   async getStatus(): Promise<CredentialsStatus> {
     if (isTauriDesktop()) {
@@ -245,4 +255,128 @@ export const cloudflareService = {
     }
   },
 };
+
+export const pluginsService = {
+  async getPluginsState(): Promise<import('../types').PluginsStatePayload> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').PluginsStatePayload>('get_plugins_state');
+    }
+    // Fallback for browser dev preview
+    return {
+      catalog: [],
+      configured_plugins: [],
+      capabilities: [],
+      system_info: {
+        os: 'windows',
+        arch: 'x86_64',
+        is_windows: true,
+        platform_supported: true,
+        features: { browser_opener: true, application_launcher: true, scoped_filesystem: true },
+      },
+    };
+  },
+
+  async savePluginConfig(
+    config: import('../types').PluginConfig,
+    secretKey?: string
+  ): Promise<import('../types').PluginMetadata> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').PluginMetadata>('save_plugin_config', {
+        config,
+        secretKey: secretKey || null,
+      });
+    }
+    throw new Error('Plugins management requires Tauri desktop runtime');
+  },
+
+  async deletePluginConfig(pluginId: string): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('delete_plugin_config', { pluginId });
+    }
+  },
+
+  async testPluginConnection(pluginId: string): Promise<import('../types').TestConnectionResult> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').TestConnectionResult>('test_plugin_connection', {
+        pluginId,
+      });
+    }
+    return {
+      success: false,
+      status: 'error',
+      latency_ms: 0,
+      message: 'Requires desktop environment',
+    };
+  },
+
+  async connectPlugin(pluginId: string): Promise<import('../types').PluginMetadata> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').PluginMetadata>('connect_plugin', { pluginId });
+    }
+    throw new Error('Requires desktop environment');
+  },
+
+  async disconnectPlugin(pluginId: string): Promise<import('../types').PluginMetadata> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').PluginMetadata>('disconnect_plugin', { pluginId });
+    }
+    throw new Error('Requires desktop environment');
+  },
+
+  async executeCapability(
+    request: import('../types').CapabilityExecutionRequest
+  ): Promise<import('../types').CapabilityExecutionResult> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').CapabilityExecutionResult>('execute_capability', {
+        request,
+      });
+    }
+    return {
+      success: false,
+      capability_id: request.capability_id,
+      error: 'Desktop capability execution is available in Tauri desktop application',
+    };
+  },
+};
+
+export const chatStorageService = {
+  async loadConversations(): Promise<import('../types').PersistedStorageFile> {
+    if (isTauriDesktop()) {
+      return await invoke<import('../types').PersistedStorageFile>('load_conversations');
+    }
+    return { version: 1, conversations: [] };
+  },
+
+  async saveConversation(conversation: import('../types').PersistedConversation): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('save_conversation', { conversation });
+    }
+  },
+
+  async deleteConversation(conversationId: string): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('delete_conversation', { conversationId });
+    }
+  },
+
+  async renameConversation(conversationId: string, title: string): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('rename_conversation', { conversationId, title });
+    }
+  },
+
+  async saveActiveConversationId(conversationId: string | null): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('save_active_conversation_id', { conversationId });
+    }
+  },
+
+  async clearAllConversations(): Promise<void> {
+    if (isTauriDesktop()) {
+      await invoke('clear_all_conversations');
+    }
+  },
+};
+
+
 

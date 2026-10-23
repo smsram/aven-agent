@@ -15,14 +15,75 @@ export interface TaskArtifact {
   sizeBytes?: number;
 }
 
+export interface ProcessStep {
+  id: string;
+  label: string;
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
+  integration_id?: string;
+  tool_name?: string;
+  timestamp: string;
+  error?: string;
+}
+
+export interface MessageMetadata {
+  model?: string;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  total_tokens?: number;
+  duration_ms?: number;
+  duration_formatted?: string;
+}
+
 export interface ChatMessage {
   id: string;
   sender: 'user' | 'assistant';
   text: string;
   timestamp: string;
-  status?: 'thinking' | 'done' | 'error';
+  status?: 'thinking' | 'done' | 'error' | 'interrupted';
+  activityStatus?: {
+    status: 'searching' | 'synthesizing' | 'tool_running' | 'done';
+    description: string;
+    integration_id?: string;
+    tool_name?: string;
+  };
+  processSteps?: ProcessStep[];
+  process_steps?: ProcessStep[];
+  metadata?: MessageMetadata;
   logs?: { timestamp: string; level: 'info' | 'warn' | 'action' | 'error'; message: string }[];
 }
+
+export interface PersistedConversation {
+  id: string;
+  title: string;
+  prompt: string;
+  status: string;
+  created_at: string;
+  completed_at?: string;
+  duration?: string;
+  model: string;
+  provider: string;
+  output?: string;
+  token_usage?: TokenUsage;
+  logs: { timestamp: string; level: 'info' | 'warn' | 'action' | 'error'; message: string }[];
+  messages: {
+    id: string;
+    sender: string;
+    text: string;
+    timestamp: string;
+    status: string;
+    metadata?: MessageMetadata;
+    process_steps: ProcessStep[];
+    logs?: { timestamp: string; level: 'info' | 'warn' | 'action' | 'error'; message: string }[];
+  }[];
+  updated_at: number;
+}
+
+export interface PersistedStorageFile {
+  version: number;
+  active_conversation_id?: string;
+  conversations: PersistedConversation[];
+}
+
 
 export interface AgentTask {
   id: string;
@@ -72,7 +133,114 @@ export interface Integration {
   lastSync?: string;
 }
 
-// MCP / Plugin interface
+// ------------------ Plugins Subsystem Types ------------------
+export type PluginKind = 'mcp' | 'api' | 'native';
+
+export type PluginStatus =
+  | 'not_configured'
+  | 'disconnected'
+  | 'connecting'
+  | 'connected'
+  | 'needs_permission'
+  | 'error'
+  | 'unsupported';
+
+export interface McpToolDefinition {
+  name: string;
+  description?: string;
+  input_schema: Record<string, unknown>;
+}
+
+export interface CatalogEntry {
+  id: string;
+  kind: PluginKind;
+  name: string;
+  category: string;
+  description: string;
+  supported_capabilities: string[];
+  requirements: string;
+  setup_instructions: string;
+  is_implemented: boolean;
+  default_command?: string;
+  default_args?: string[];
+  default_url?: string;
+  permissions_notice: string;
+}
+
+export interface PluginMetadata {
+  id: string;
+  kind: PluginKind;
+  name: string;
+  status: PluginStatus;
+  has_secret: boolean;
+  error_message?: string;
+  latency_ms?: number;
+  approved_paths: string[];
+  settings: Record<string, string>;
+  discovered_tools: McpToolDefinition[];
+}
+
+export interface PluginConfig {
+  id: string;
+  kind: PluginKind;
+  name: string;
+  enabled: boolean;
+  transport?: string;
+  command?: string;
+  args?: string[];
+  url?: string;
+  approved_paths?: string[];
+  settings: Record<string, string>;
+  last_status: PluginStatus;
+  last_error?: string;
+}
+
+export interface RegisteredCapability {
+  id: string;
+  source_id: string;
+  kind: PluginKind;
+  name: string;
+  description: string;
+  input_schema: Record<string, unknown>;
+  required_permission: 'read' | 'write' | 'execute' | 'network' | 'full';
+  requires_confirmation: boolean;
+  is_available: boolean;
+}
+
+export interface PluginsStatePayload {
+  catalog: CatalogEntry[];
+  configured_plugins: PluginMetadata[];
+  capabilities: RegisteredCapability[];
+  system_info: {
+    os: string;
+    arch: string;
+    is_windows: boolean;
+    platform_supported: boolean;
+    features: Record<string, boolean>;
+  };
+}
+
+export interface TestConnectionResult {
+  success: boolean;
+  status: PluginStatus;
+  latency_ms: number;
+  message: string;
+}
+
+export interface CapabilityExecutionRequest {
+  capability_id: string;
+  arguments: Record<string, unknown>;
+  user_confirmed: boolean;
+}
+
+export interface CapabilityExecutionResult {
+  success: boolean;
+  capability_id: string;
+  result?: Record<string, unknown>;
+  error?: string;
+}
+
+// Backward compatibility McpPlugin
 export interface McpPlugin {
   id: string;
   name: string;
