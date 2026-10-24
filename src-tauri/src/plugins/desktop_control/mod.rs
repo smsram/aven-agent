@@ -1,3 +1,4 @@
+pub mod coordinates;
 pub mod cursor;
 pub mod hotkey;
 pub mod input;
@@ -7,6 +8,7 @@ pub mod screenshot;
 pub mod taskbar;
 pub mod timing;
 pub mod uia;
+pub mod verification;
 pub mod windows;
 
 use crate::plugins::registry::{CapabilityKind, PermissionLevel, RegisteredCapability};
@@ -96,7 +98,7 @@ pub fn get_desktop_control_capabilities() -> Vec<RegisteredCapability> {
             source_id: "native_desktop_control".to_string(),
             kind: CapabilityKind::Native,
             name: "Mouse Action".to_string(),
-            description: "Controls the mouse: move to coordinates, click (default left, right, middle), double-click, drag smoothly to destination, press, release, or scroll vertically and horizontally.".to_string(),
+            description: "Controls the mouse: move to coordinates, click (default left, right, middle), double-click, drag smoothly, press, release, or scroll. Accepts either raw desktop coordinates (x, y) or image-observed coordinates (image_x, image_y) with screenshot metadata for automatic translation.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -110,8 +112,16 @@ pub fn get_desktop_control_capabilities() -> Vec<RegisteredCapability> {
                         "enum": ["left", "right", "middle"],
                         "description": "Mouse button (left, right, middle). Defaults to 'left', never right."
                     },
-                    "x": { "type": "integer", "description": "Target X screen coordinate" },
-                    "y": { "type": "integer", "description": "Target Y screen coordinate" },
+                    "x": { "type": "integer", "description": "Target X desktop coordinate (Windows virtual screen)" },
+                    "y": { "type": "integer", "description": "Target Y desktop coordinate (Windows virtual screen)" },
+                    "image_x": { "type": "number", "description": "Target X coordinate on observed screenshot image" },
+                    "image_y": { "type": "number", "description": "Target Y coordinate on observed screenshot image" },
+                    "desktop_origin_x": { "type": "integer", "description": "Desktop origin X from screenshot metadata" },
+                    "desktop_origin_y": { "type": "integer", "description": "Desktop origin Y from screenshot metadata" },
+                    "scale_x": { "type": "number", "description": "Scale X factor from screenshot metadata" },
+                    "scale_y": { "type": "number", "description": "Scale Y factor from screenshot metadata" },
+                    "image_width": { "type": "integer", "description": "Width of observed screenshot image" },
+                    "image_height": { "type": "integer", "description": "Height of observed screenshot image" },
                     "to_x": { "type": "integer", "description": "Destination X coordinate (for drag)" },
                     "to_y": { "type": "integer", "description": "Destination Y coordinate (for drag)" },
                     "scroll_x": { "type": "integer", "description": "Horizontal scroll steps (positive = right, negative = left)" },
@@ -156,19 +166,35 @@ pub fn get_desktop_control_capabilities() -> Vec<RegisteredCapability> {
             source_id: "native_desktop_control".to_string(),
             kind: CapabilityKind::Native,
             name: "Inspect UI Elements".to_string(),
-            description: "Semantic Windows UI Automation inspection: read the foreground window accessibility tree, find controls by name/role/automation ID, inspect focused control details (values, text, selection, caret), click/invoke controls, set element values, select items, scroll, or expand/collapse controls.".to_string(),
+            description: "Semantic Windows UI Automation on-demand: inspect focused control details, inspect window actionable controls, read text/values/caret from inputs, check control enabled/focus state, get exact element bounding boxes for clicks, revalidate element bounds, or scroll.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["read_tree", "find_element", "get_focused_control", "invoke", "set_value", "select_item", "scroll", "expand_collapse"],
-                        "description": "UI inspection or interaction action"
+                        "enum": [
+                            "get_focused_control",
+                            "inspect_window",
+                            "read_text",
+                            "check_state",
+                            "get_element_bounds",
+                            "revalidate_element",
+                            "find_element",
+                            "read_tree",
+                            "invoke",
+                            "set_value",
+                            "select_item",
+                            "scroll",
+                            "expand_collapse"
+                        ],
+                        "description": "Targeted UIA action to query or execute on-demand"
                     },
                     "window_id": { "type": "integer", "description": "Window handle (HWND) - defaults to active foreground window" },
                     "query": { "type": "string", "description": "Control name, label text, or automation ID" },
                     "control_type": { "type": "string", "description": "Filter by control type (e.g. Button, Edit, Text, MenuItem, TabItem, ComboBox, CheckBox)" },
                     "value": { "type": "string", "description": "Text value to assign (for set_value)" },
+                    "expected_x": { "type": "integer", "description": "Expected center X coordinate for revalidate_element" },
+                    "expected_y": { "type": "integer", "description": "Expected center Y coordinate for revalidate_element" },
                     "scroll_x": { "type": "integer", "description": "Horizontal scroll steps (for scroll)" },
                     "scroll_y": { "type": "integer", "description": "Vertical scroll steps (for scroll)" },
                     "expand": { "type": "boolean", "description": "True to expand, false to collapse (for expand_collapse)" },
@@ -185,7 +211,7 @@ pub fn get_desktop_control_capabilities() -> Vec<RegisteredCapability> {
             source_id: "native_desktop_control".to_string(),
             kind: CapabilityKind::Native,
             name: "Capture Screenshot".to_string(),
-            description: "Captures a high-resolution screenshot of the foreground window, a specified window, the primary monitor, or all monitors. Saves to disk and optionally returns base64 image data.".to_string(),
+            description: "Vision-first perception tool: captures screenshot of foreground window, selected window, primary monitor, or all monitors with adaptive aspect-ratio downscaling (1280-1600px), targeted crops, JPEG/PNG encoding, and full Windows virtual desktop coordinate mapping metadata.".to_string(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -195,7 +221,21 @@ pub fn get_desktop_control_capabilities() -> Vec<RegisteredCapability> {
                         "description": "Screenshot capture target (default: foreground_window)"
                     },
                     "window_id": { "type": "integer", "description": "Window handle (HWND) if target is selected_window" },
-                    "save_to_path": { "type": "string", "description": "Optional specific file path for PNG file" },
+                    "crop": {
+                        "type": "object",
+                        "description": "Optional crop rectangle for detailed inspection of small or ambiguous controls",
+                        "properties": {
+                            "x": { "type": "integer", "description": "Crop start X coordinate" },
+                            "y": { "type": "integer", "description": "Crop start Y coordinate" },
+                            "width": { "type": "integer", "description": "Crop width in pixels" },
+                            "height": { "type": "integer", "description": "Crop height in pixels" }
+                        },
+                        "required": ["x", "y", "width", "height"]
+                    },
+                    "max_dimension": { "type": "integer", "description": "Maximum longest edge in pixels (default 1440, adaptive 1280-1600)" },
+                    "format": { "type": "string", "enum": ["jpeg", "png"], "description": "Image format ('jpeg' with quality tuning or 'png' for sharp text/lossless crops)" },
+                    "jpeg_quality": { "type": "integer", "description": "JPEG compression quality 10-100 (default 82)" },
+                    "save_to_path": { "type": "string", "description": "Optional specific file path for image file" },
                     "include_image_data": { "type": "boolean", "description": "If true, returns base64-encoded image data" }
                 }
             }),
@@ -501,8 +541,33 @@ pub fn execute_desktop_control_capability(
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| "Missing required parameter 'action'".to_string())?;
 
-            let x = args.get("x").and_then(|v| v.as_i64()).map(|v| v as i32);
-            let y = args.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
+            // Translate image coordinates to Windows virtual desktop coordinates if provided
+            let (x, y) = if let (Some(ix), Some(iy)) = (
+                args.get("image_x").and_then(|v| v.as_f64()),
+                args.get("image_y").and_then(|v| v.as_f64()),
+            ) {
+                let orig_x = args.get("desktop_origin_x").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let orig_y = args.get("desktop_origin_y").and_then(|v| v.as_i64()).unwrap_or(0) as i32;
+                let scale_x = args.get("scale_x").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                let scale_y = args.get("scale_y").and_then(|v| v.as_f64()).unwrap_or(1.0);
+                let img_w = args.get("image_width").and_then(|v| v.as_u64()).unwrap_or(1920) as u32;
+                let img_h = args.get("image_height").and_then(|v| v.as_u64()).unwrap_or(1080) as u32;
+                let dpi = args.get("dpi_scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
+
+                let ctx = coordinates::CoordinateTransformContext::new(
+                    orig_x, orig_y, scale_x, scale_y, img_w, img_h, img_w, img_h, dpi,
+                );
+                let pt = coordinates::transform_image_to_desktop(ix, iy, &ctx)?;
+                (Some(pt.x), Some(pt.y))
+            } else {
+                let raw_x = args.get("x").and_then(|v| v.as_i64()).map(|v| v as i32);
+                let raw_y = args.get("y").and_then(|v| v.as_i64()).map(|v| v as i32);
+                if let (Some(rx), Some(ry)) = (raw_x, raw_y) {
+                    coordinates::validate_desktop_coordinates(rx, ry)?;
+                }
+                (raw_x, raw_y)
+            };
+
             let to_x = args.get("to_x").and_then(|v| v.as_i64()).map(|v| v as i32);
             let to_y = args.get("to_y").and_then(|v| v.as_i64()).map(|v| v as i32);
             let scroll_x = args.get("scroll_x").and_then(|v| v.as_i64()).map(|v| v as i32);
@@ -540,28 +605,58 @@ pub fn execute_desktop_control_capability(
                     if let (Some(px), Some(py)) = (x, y) {
                         overlay::update_pointer(px, py);
                     }
-                    Ok(serde_json::json!({ "status": "success", "action": "click", "button": clean_btn }))
+                    Ok(serde_json::json!({
+                        "status": "success",
+                        "action": "click",
+                        "button": clean_btn,
+                        "target_coordinates": { "x": x, "y": y },
+                        "native_input_dispatched": true,
+                        "verified": false,
+                        "note": "Native click dispatched to OS. Capture screenshot or verify control state to confirm intended outcome."
+                    }))
                 }
                 "left_click" => {
                     input::click_mouse("left", x, y)?;
                     if let (Some(px), Some(py)) = (x, y) {
                         overlay::update_pointer(px, py);
                     }
-                    Ok(serde_json::json!({ "status": "success", "action": "left_click" }))
+                    Ok(serde_json::json!({
+                        "status": "success",
+                        "action": "left_click",
+                        "button": "left",
+                        "target_coordinates": { "x": x, "y": y },
+                        "native_input_dispatched": true,
+                        "verified": false,
+                        "note": "Native left click dispatched to OS. Verify outcome before declaring success."
+                    }))
                 }
                 "right_click" => {
                     input::click_mouse("right", x, y)?;
                     if let (Some(px), Some(py)) = (x, y) {
                         overlay::update_pointer(px, py);
                     }
-                    Ok(serde_json::json!({ "status": "success", "action": "right_click" }))
+                    Ok(serde_json::json!({
+                        "status": "success",
+                        "action": "right_click",
+                        "button": "right",
+                        "target_coordinates": { "x": x, "y": y },
+                        "native_input_dispatched": true,
+                        "verified": false
+                    }))
                 }
                 "middle_click" => {
                     input::click_mouse("middle", x, y)?;
                     if let (Some(px), Some(py)) = (x, y) {
                         overlay::update_pointer(px, py);
                     }
-                    Ok(serde_json::json!({ "status": "success", "action": "middle_click" }))
+                    Ok(serde_json::json!({
+                        "status": "success",
+                        "action": "middle_click",
+                        "button": "middle",
+                        "target_coordinates": { "x": x, "y": y },
+                        "native_input_dispatched": true,
+                        "verified": false
+                    }))
                 }
                 "press" => {
                     input::press_mouse_button(clean_btn, x, y)?;
@@ -582,7 +677,13 @@ pub fn execute_desktop_control_capability(
                     if let (Some(px), Some(py)) = (x, y) {
                         overlay::update_pointer(px, py);
                     }
-                    Ok(serde_json::json!({ "status": "success", "action": "double_click" }))
+                    Ok(serde_json::json!({
+                        "status": "success",
+                        "action": "double_click",
+                        "target_coordinates": { "x": x, "y": y },
+                        "native_input_dispatched": true,
+                        "verified": false
+                    }))
                 }
                 "drag" => {
                     let from_x = x.ok_or_else(|| "Missing required 'x' (start) for drag".to_string())?;
@@ -704,7 +805,13 @@ pub fn execute_desktop_control_capability(
             let action = args
                 .get("action")
                 .and_then(|v| v.as_str())
-                .ok_or_else(|| "Missing required parameter 'action'".to_string())?;
+                .unwrap_or(if args.get("query").is_some() {
+                    "find_element"
+                } else if args.get("window_id").is_some() {
+                    "inspect_window"
+                } else {
+                    "get_focused_control"
+                });
 
             let _session = cursor::acquire_session()?;
             overlay::set_activity_text(format!("Inspecting UI: {action}..."));
@@ -715,9 +822,13 @@ pub fn execute_desktop_control_capability(
             let max_depth = args.get("max_depth").and_then(|v| v.as_u64()).map(|d| d as u32);
 
             match action.to_lowercase().as_str() {
-                "read_tree" | "read_foreground" => {
+                "read_tree" | "read_tree_deep" => {
                     let tree_res = uia::inspect_window_tree(hwnd, max_depth)?;
                     Ok(serde_json::to_value(&tree_res).unwrap_or_default())
+                }
+                "read_foreground" => {
+                    let res = uia::inspect_window_actionable_controls(hwnd)?;
+                    Ok(res)
                 }
                 "find_element" => {
                     let elements = uia::find_elements(hwnd, query, control_type, Some(20))?;
@@ -764,8 +875,32 @@ pub fn execute_desktop_control_capability(
                     let msg = uia::expand_collapse_element(hwnd, q, expand)?;
                     Ok(serde_json::json!({ "status": "success", "message": msg }))
                 }
+                "inspect_window" => {
+                    let res = uia::inspect_window_actionable_controls(hwnd)?;
+                    Ok(res)
+                }
+                "read_text" => {
+                    let res = uia::read_element_text(hwnd, query)?;
+                    Ok(res)
+                }
+                "check_state" => {
+                    let res = uia::check_element_state(hwnd, query)?;
+                    Ok(res)
+                }
+                "get_element_bounds" => {
+                    let q = query.ok_or_else(|| "Missing required parameter 'query' for get_element_bounds".to_string())?;
+                    let res = uia::get_element_bounds(hwnd, q)?;
+                    Ok(res)
+                }
+                "revalidate_element" => {
+                    let q = query.ok_or_else(|| "Missing required parameter 'query' for revalidate_element".to_string())?;
+                    let exp_x = args.get("expected_x").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let exp_y = args.get("expected_y").and_then(|v| v.as_i64()).map(|v| v as i32);
+                    let res = uia::revalidate_element(hwnd, q, exp_x, exp_y)?;
+                    Ok(res)
+                }
                 other => Err(format!(
-                    "Unsupported inspect_ui action: '{other}'. Valid options: read_tree, find_element, get_focused_control, invoke, set_value, select_item, scroll, expand_collapse"
+                    "Unsupported inspect_ui action: '{other}'. Valid options: get_focused_control, inspect_window, read_text, check_state, get_element_bounds, revalidate_element, read_tree, find_element, invoke, set_value, select_item, scroll, expand_collapse"
                 )),
             }
         }
@@ -782,9 +917,31 @@ pub fn execute_desktop_control_capability(
                 .or_else(|| args.get("target_hwnd"))
                 .and_then(|v| v.as_i64());
             let save_path = args.get("save_to_path").and_then(|v| v.as_str());
-            let include_base64 = args.get("include_image_data").and_then(|v| v.as_bool()).unwrap_or(false);
+            let include_base64 = args.get("include_image_data").and_then(|v| v.as_bool()).unwrap_or(true);
+            let crop = args.get("crop").and_then(|v| {
+                let cx = v.get("x")?.as_i64()? as i32;
+                let cy = v.get("y")?.as_i64()? as i32;
+                let cw = v.get("width")?.as_u64()? as u32;
+                let ch = v.get("height")?.as_u64()? as u32;
+                Some(screenshot::CropRect { x: cx, y: cy, width: cw, height: ch })
+            });
+            let max_dim = args.get("max_dimension").and_then(|v| v.as_u64()).map(|v| v as u32).or(Some(1440));
+            let fmt = args.get("format").and_then(|v| v.as_str());
+            let q = args.get("jpeg_quality").and_then(|v| v.as_u64()).map(|v| v as u8);
 
-            let shot_res = screenshot::capture_screenshot(target, target_hwnd, save_path, include_base64, default_dir)?;
+            let shot_res = screenshot::capture_screenshot_advanced(
+                screenshot::ScreenshotCaptureOptions {
+                    target,
+                    target_hwnd,
+                    crop,
+                    max_dimension: max_dim,
+                    format: fmt,
+                    jpeg_quality: q,
+                    save_path,
+                    include_base64,
+                },
+                default_dir,
+            )?;
             Ok(serde_json::to_value(&shot_res).unwrap_or_default())
         }
 
@@ -972,7 +1129,7 @@ mod tests {
 
     #[test]
     fn test_execute_dispatcher_wait_for_ui_timeout() {
-        let _lock = TEST_DESKTOP_LOCK.lock().unwrap();
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = std::env::temp_dir();
         let res = execute_desktop_control_capability(
             "desktop_control_wait_for_ui",
@@ -990,7 +1147,7 @@ mod tests {
 
     #[test]
     fn test_execute_dispatcher_screenshot_capture() {
-        let _lock = TEST_DESKTOP_LOCK.lock().unwrap();
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = std::env::temp_dir().join("aven_test_shots");
         let win_list = windows::list_windows(false, None, None).unwrap_or_default();
         let target_payload = if let Some(first_win) = win_list.into_iter().find(|w| w.rect.width > 50 && w.rect.height > 50) {
@@ -1031,6 +1188,8 @@ mod tests {
 
     #[test]
     fn test_execute_dispatcher_get_screen_info() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        hotkey::reset_cancellation();
         let temp_dir = std::env::temp_dir();
         let res = execute_desktop_control_capability(
             "desktop_control_get_screen_info",
@@ -1058,7 +1217,7 @@ mod tests {
 
     #[test]
     fn test_mouse_action_defaults_to_left_click() {
-        let _lock = TEST_DESKTOP_LOCK.lock().unwrap();
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = std::env::temp_dir();
         // Unspecified button must ALWAYS default to left, never right
         let res = execute_desktop_control_capability(
@@ -1085,7 +1244,7 @@ mod tests {
 
     #[test]
     fn test_mouse_action_explicit_buttons() {
-        let _lock = TEST_DESKTOP_LOCK.lock().unwrap();
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = std::env::temp_dir();
         let res_right = execute_desktop_control_capability(
             "desktop_control_mouse_action",
@@ -1106,7 +1265,7 @@ mod tests {
 
     #[test]
     fn test_keyboard_action_type_text_dispatch() {
-        let _lock = TEST_DESKTOP_LOCK.lock().unwrap();
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let temp_dir = std::env::temp_dir();
         let sample_text = "Hi\nThis is a multiline test string 🚀";
         let res = execute_desktop_control_capability(
@@ -1160,7 +1319,7 @@ mod tests {
 
     #[test]
     fn test_notepad_live_observation_and_verification() {
-        let _lock = TEST_DESKTOP_LOCK.lock().unwrap();
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 
         let initial_text = "Hello Aven Desktop Observation Pipeline";
         let temp_file = std::env::temp_dir().join("aven_notepad_observation_test.txt");
@@ -1267,5 +1426,271 @@ mod tests {
         let _ = std::fs::remove_file(&temp_file);
         println!("[CLEANUP] Notepad test process terminated and temp file removed safely.");
     }
-}
 
+    #[test]
+    fn test_screenshot_advanced_adaptive_resize_and_metadata() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+        let res = execute_desktop_control_capability(
+            "desktop_control_capture_screenshot",
+            &serde_json::json!({
+                "target": "primary_monitor",
+                "max_dimension": 1280,
+                "format": "jpeg",
+                "jpeg_quality": 75,
+                "include_image_data": true
+            }),
+            false,
+            &temp_dir,
+        ).expect("Advanced screenshot capture must succeed");
+
+        assert_eq!(res["format"], "jpeg");
+        assert!(res["width"].as_u64().unwrap_or(0) <= 1280);
+        assert!(res["height"].as_u64().unwrap_or(0) <= 1280);
+        assert!(res["scale_x"].as_f64().unwrap_or(0.0) > 0.0);
+        assert!(res["scale_y"].as_f64().unwrap_or(0.0) > 0.0);
+        assert!(res["original_width"].as_u64().unwrap_or(0) > 0);
+        assert!(res["original_height"].as_u64().unwrap_or(0) > 0);
+        assert!(res["desktop_origin_x"].is_number());
+        assert!(res["desktop_origin_y"].is_number());
+        assert!(res["dpi_scale"].as_f64().unwrap_or(0.0) > 0.0);
+        assert!(res["image_base64"].as_str().is_some());
+
+        let file_path = res["file_path"].as_str().unwrap();
+        assert!(std::path::Path::new(file_path).exists());
+        let _ = std::fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn test_screenshot_crop_capture() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+        let res = execute_desktop_control_capability(
+            "desktop_control_capture_screenshot",
+            &serde_json::json!({
+                "target": "primary_monitor",
+                "crop": {
+                    "x": 50,
+                    "y": 50,
+                    "width": 200,
+                    "height": 150
+                },
+                "format": "png",
+                "include_image_data": true
+            }),
+            false,
+            &temp_dir,
+        ).expect("Crop screenshot must succeed");
+
+        assert_eq!(res["is_crop"], true);
+        assert_eq!(res["format"], "png");
+        assert_eq!(res["original_width"], 200);
+        assert_eq!(res["original_height"], 150);
+        assert_eq!(res["desktop_origin_x"], 50);
+        assert_eq!(res["desktop_origin_y"], 50);
+
+        let file_path = res["file_path"].as_str().unwrap();
+        assert!(std::path::Path::new(file_path).exists());
+        let _ = std::fs::remove_file(file_path);
+    }
+
+    #[test]
+    fn test_mouse_action_with_image_coordinates_transform() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+        // Model observed target at (640, 360) on a 1280x720 downscaled image from 1920x1080 screen (scale = 0.666667)
+        let res = execute_desktop_control_capability(
+            "desktop_control_mouse_action",
+            &serde_json::json!({
+                "action": "move",
+                "image_x": 640.0,
+                "image_y": 360.0,
+                "desktop_origin_x": 0,
+                "desktop_origin_y": 0,
+                "scale_x": 1280.0 / 1920.0,
+                "scale_y": 720.0 / 1080.0,
+                "image_width": 1280,
+                "image_height": 720,
+                "dpi_scale": 1.0
+            }),
+            false,
+            &temp_dir,
+        ).expect("Mouse action with image coordinate translation should succeed");
+
+        assert_eq!(res["status"], "success");
+        assert_eq!(res["x"], 960);
+        assert_eq!(res["y"], 540);
+    }
+
+    #[test]
+    fn test_targeted_uia_capabilities_dispatch() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+
+        // 1. Get focused control
+        let res_fc = execute_desktop_control_capability(
+            "desktop_control_inspect_ui",
+            &serde_json::json!({ "action": "get_focused_control" }),
+            false,
+            &temp_dir,
+        ).expect("get_focused_control must succeed");
+        assert_eq!(res_fc["status"], "success");
+        assert!(res_fc["focused_control"].is_object());
+
+        // 2. Read text from focused control
+        let res_rt = execute_desktop_control_capability(
+            "desktop_control_inspect_ui",
+            &serde_json::json!({ "action": "read_text" }),
+            false,
+            &temp_dir,
+        ).expect("read_text must succeed");
+        assert!(res_rt["control_type"].is_string());
+        assert!(res_rt["content"].is_object());
+
+        // 3. Check state of focused control
+        let res_cs = execute_desktop_control_capability(
+            "desktop_control_inspect_ui",
+            &serde_json::json!({ "action": "check_state" }),
+            false,
+            &temp_dir,
+        ).expect("check_state must succeed");
+        assert!(res_cs["is_enabled"].is_boolean());
+        assert!(res_cs["has_keyboard_focus"].is_boolean());
+    }
+
+    #[test]
+    fn test_stale_coordinate_revalidation() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+
+        // Querying non-existent element should return is_valid: false without crashing
+        let res = execute_desktop_control_capability(
+            "desktop_control_inspect_ui",
+            &serde_json::json!({
+                "action": "revalidate_element",
+                "query": "NonExistentControlXYZ_12345",
+                "expected_x": 500,
+                "expected_y": 500
+            }),
+            false,
+            &temp_dir,
+        ).expect("Revalidate should handle missing elements cleanly");
+
+        assert_eq!(res["is_valid"], false);
+        assert!(res["diagnosis"].as_str().unwrap().contains("could not be revalidated"));
+    }
+
+    #[test]
+    fn test_click_verification_distinguishes_native_dispatch_vs_outcome() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+
+        // Mouse action should record that native input was dispatched, but verified: false
+        // until post-action observation/verification is performed.
+        let res = execute_desktop_control_capability(
+            "desktop_control_mouse_action",
+            &serde_json::json!({
+                "action": "click",
+                "button": "left"
+            }),
+            false,
+            &temp_dir,
+        ).expect("Mouse click dispatch must succeed");
+
+        assert_eq!(res["status"], "success");
+        assert_eq!(res["action"], "click");
+        assert_eq!(res["native_input_dispatched"], true);
+        assert_eq!(res["verified"], false);
+        assert!(res["note"].as_str().unwrap().contains("Native click dispatched"));
+    }
+
+    #[test]
+    fn test_default_inspect_ui_action_routing() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let temp_dir = std::env::temp_dir();
+
+        // If action is omitted and query is provided, routes to find_element
+        let res_query = execute_desktop_control_capability(
+            "desktop_control_inspect_ui",
+            &serde_json::json!({
+                "query": "Desktop"
+            }),
+            false,
+            &temp_dir,
+        ).expect("Inspect UI with query should route to find_element");
+
+        assert!(res_query["count"].is_number());
+        assert!(res_query["elements"].is_array());
+
+        // If action and query are omitted, routes to get_focused_control
+        let res_focused = execute_desktop_control_capability(
+            "desktop_control_inspect_ui",
+            &serde_json::json!({}),
+            false,
+            &temp_dir,
+        ).expect("Inspect UI with empty args should route to get_focused_control");
+
+        assert_eq!(res_focused["status"], "success");
+        assert!(res_focused["focused_control"].is_object());
+    }
+
+    #[test]
+    fn test_cancellation_and_emergency_stop_lifecycle() {
+        let _lock = TEST_DESKTOP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        // 1. Simulate hotkey cancellation triggering
+        hotkey::trigger_cancellation();
+        assert!(hotkey::is_cancelled());
+
+        // 2. Perform emergency restoration & cleanup
+        overlay::clear_activity_text();
+        overlay::stop_desktop_automation();
+        cursor::force_restore_and_cleanup();
+        input::release_all_input_locks();
+
+        // 3. Reset cancellation flag
+        hotkey::reset_cancellation();
+        assert!(!hotkey::is_cancelled());
+        assert!(!cursor::is_in_active_session());
+    }
+
+    #[test]
+    fn test_bounded_verification_failure_diagnosis() {
+        let baseline = verification::ActionBaseline {
+            window_id: Some(101),
+            window_title: Some("Untitled - Notepad".to_string()),
+            focused_control_name: Some("Text Editor".to_string()),
+            focused_control_type: Some("Edit".to_string()),
+            existing_text: Some("Initial sentence".to_string()),
+            caret_position: Some(16),
+            ..Default::default()
+        };
+
+        // If control is read-only and lost focus, diagnose_failure reports both
+        let diag = verification::diagnose_failure("type_text", &baseline, Some(202), Some("Initial sentence"), false, true);
+        assert!(diag.contains("Read-Only"));
+        assert!(diag.contains("lost keyboard focus"));
+        assert!(diag.contains("shifted from HWND 101 to 202"));
+
+        let fail_res = verification::ActionVerificationResult::failure(
+            "type_text",
+            Some("New sentence".to_string()),
+            Some("Initial sentence".to_string()),
+            &diag,
+            1,
+            2,
+        );
+        assert_eq!(fail_res.verified, false);
+        assert_eq!(fail_res.can_retry, true);
+
+        let exhausted_res = verification::ActionVerificationResult::failure(
+            "type_text",
+            Some("New sentence".to_string()),
+            Some("Initial sentence".to_string()),
+            &diag,
+            2,
+            2,
+        );
+        assert_eq!(exhausted_res.can_retry, false);
+    }
+}

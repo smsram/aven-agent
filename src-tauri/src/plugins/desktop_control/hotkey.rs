@@ -71,3 +71,13 @@ pub fn is_cancelled() -> bool {
 pub fn reset_cancel_flag() {
     GLOBAL_CANCELLED.store(false, Ordering::SeqCst);
 }
+
+/// Trigger cancellation programmatically (e.g. in tests or from cancellation token)
+pub fn trigger_cancellation() {
+    GLOBAL_CANCELLED.store(true, Ordering::SeqCst);
+}
+
+/// Reset cancellation flag
+pub fn reset_cancellation() {
+    reset_cancel_flag();
+}

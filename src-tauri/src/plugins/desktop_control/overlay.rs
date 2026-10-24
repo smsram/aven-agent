@@ -5,22 +5,22 @@ use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetStockObject,
-    GetTextExtentPoint32W, InvalidateRect, LineTo, MoveToEx, RoundRect, SelectObject, SetBkMode,
-    SetTextColor, TextOutW, BLACK_BRUSH, HBRUSH, HDC, PAINTSTRUCT, PS_SOLID,
-    TRANSPARENT,
+    GetTextExtentPoint32W, InvalidateRect, RoundRect, SelectObject, SetBkMode, SetTextColor,
+    TextOutW, HDC, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, GetSystemMetrics,
     PostMessageW, RegisterClassW, SetLayeredWindowAttributes, SetWindowPos, ShowWindow,
-    CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_COLORKEY, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    CS_HREDRAW, CS_VREDRAW, HWND_TOPMOST, LWA_COLORKEY, SM_CXSCREEN, SM_CXVIRTUALSCREEN,
+    SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SWP_NOACTIVATE, SWP_SHOWWINDOW,
     SW_HIDE, SW_SHOWNOACTIVATE, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
     WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WM_DESTROY, WM_PAINT, WM_USER,
 };
 
+static AUTOMATION_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
-static CURSOR_X: AtomicI32 = AtomicI32::new(0);
-static CURSOR_Y: AtomicI32 = AtomicI32::new(0);
+static LAST_TARGET_X: AtomicI32 = AtomicI32::new(-9999);
+static LAST_TARGET_Y: AtomicI32 = AtomicI32::new(-9999);
 static OVERLAY_HWND_RAW: AtomicIsize = AtomicIsize::new(0);
 static OVERLAY_THREAD_INIT: OnceLock<()> = OnceLock::new();
 static ACTIVITY_LABEL: OnceLock<Mutex<String>> = OnceLock::new();
@@ -66,23 +66,28 @@ unsafe extern "system" fn overlay_wnd_proc(
         }
         WM_UPDATE_OVERLAY => {
             unsafe {
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(hwnd, None, false);
             }
             LRESULT(0)
         }
         WM_SHOW_OVERLAY => {
             unsafe {
+                let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
+                let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
+                let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
+                let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+
                 let _ = SetWindowPos(
                     hwnd,
                     HWND_TOPMOST,
-                    0,
-                    0,
-                    0,
-                    0,
-                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    vx,
+                    vy,
+                    vw,
+                    vh,
+                    SWP_NOACTIVATE | SWP_SHOWWINDOW,
                 );
                 let _ = ShowWindow(hwnd, SW_SHOWNOACTIVATE);
-                let _ = InvalidateRect(hwnd, None, true);
+                let _ = InvalidateRect(hwnd, None, false);
             }
             LRESULT(0)
         }
@@ -92,9 +97,7 @@ unsafe extern "system" fn overlay_wnd_proc(
             }
             LRESULT(0)
         }
-        WM_DESTROY => {
-            LRESULT(0)
-        }
+        WM_DESTROY => LRESULT(0),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
@@ -103,53 +106,41 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: HDC) {
     unsafe {
         let mut rect = RECT::default();
         let _ = windows::Win32::UI::WindowsAndMessaging::GetClientRect(hwnd, &mut rect);
-
-        // 1. Clear background to black (which LWA_COLORKEY makes 100% transparent)
-        let black_brush = GetStockObject(BLACK_BRUSH);
-        let _ = FillRect(hdc, &rect, HBRUSH(black_brush.0));
-
-        // Aven Primary Accent Color: RGB(124, 124, 248) -> #7C7CF8
-        let aven_color = COLORREF(0x00F87C7C); // 0x00BBGGRR
-        let pen = CreatePen(PS_SOLID, 4, aven_color);
-        let old_pen = SelectObject(hdc, pen);
-
         let w = rect.right - rect.left;
         let h = rect.bottom - rect.top;
-        let bracket_len = 48;
-        let inset = 12;
 
-        // 2. Screen border brackets: active-control visual indicator
-        // Top-left corner
-        let _ = MoveToEx(hdc, inset, inset + bracket_len, None);
-        let _ = LineTo(hdc, inset, inset);
-        let _ = LineTo(hdc, inset + bracket_len, inset);
+        // 1. Fill entire window with pure black (the colorkey) -> 100% transparent.
+        // NO blue tint, NO backdrop, NO dimming, NO blur, NO glow, NO screen tint.
+        let transparent_brush = CreateSolidBrush(COLORREF(0x00000000));
+        let _ = FillRect(hdc, &rect, transparent_brush);
+        let _ = DeleteObject(transparent_brush);
 
-        // Top-right corner
-        let _ = MoveToEx(hdc, w - inset - bracket_len, inset, None);
-        let _ = LineTo(hdc, w - inset, inset);
-        let _ = LineTo(hdc, w - inset, inset + bracket_len);
+        // If automation is not active, keep everything completely transparent
+        if !OVERLAY_ACTIVE.load(Ordering::Relaxed) {
+            return;
+        }
 
-        // Bottom-left corner
-        let _ = MoveToEx(hdc, inset, h - inset - bracket_len, None);
-        let _ = LineTo(hdc, inset, h - inset);
-        let _ = LineTo(hdc, inset + bracket_len, h - inset);
+        // 2. Thin clean 2px border around the entire virtual desktop (#686DF6 -> BGR: 0x00F66D68)
+        let aven_color = COLORREF(0x00F66D68);
+        let border_pen = CreatePen(PS_SOLID, 2, aven_color);
+        let old_pen = SelectObject(hdc, border_pen);
+        let null_brush = GetStockObject(windows::Win32::Graphics::Gdi::NULL_BRUSH);
+        let old_brush = SelectObject(hdc, null_brush);
 
-        // Bottom-right corner
-        let _ = MoveToEx(hdc, w - inset - bracket_len, h - inset, None);
-        let _ = LineTo(hdc, w - inset, h - inset);
-        let _ = LineTo(hdc, w - inset, h - inset - bracket_len);
+        let _ = windows::Win32::Graphics::Gdi::Rectangle(hdc, 0, 0, w, h);
 
+        let _ = SelectObject(hdc, old_brush);
         let _ = SelectObject(hdc, old_pen);
-        let _ = DeleteObject(pen);
+        let _ = DeleteObject(border_pen);
 
-        // 3. Render real-time Floating Activity Label near pointer (click-through, always on top)
-        let cx = CURSOR_X.load(Ordering::Relaxed);
-        let cy = CURSOR_Y.load(Ordering::Relaxed);
+        // NOTE: Custom cursor drawing is completely removed per user instruction.
+        // Real Windows mouse pointer is never replaced, hidden, or modified.
 
+        // 3. Render unobtrusive live activity container near top-center of primary screen
         let label_text = {
             let guard = get_activity_label().lock().unwrap();
             if guard.is_empty() {
-                "Aven Desktop Control".to_string()
+                "Analyzing screen".to_string()
             } else {
                 guard.clone()
             }
@@ -159,43 +150,43 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: HDC) {
         let mut text_size = SIZE::default();
         let _ = GetTextExtentPoint32W(hdc, &wide_text, &mut text_size);
 
-        let pill_width = text_size.cx + 28;
-        let pill_height = 24.max(text_size.cy + 10);
+        let container_width = (text_size.cx + 38).max(140);
+        let container_height = 28i32;
 
-        // Screen collision-aware positioning:
-        // By default offset by (+20, +22) so it does NOT cover the cursor hotspot at (cx, cy)
+        // Position on primary monitor (origin is (0,0) relative to Windows virtual screen)
         let vx = GetSystemMetrics(SM_XVIRTUALSCREEN);
         let vy = GetSystemMetrics(SM_YVIRTUALSCREEN);
-        let vw = GetSystemMetrics(SM_CXVIRTUALSCREEN);
-        let vh = GetSystemMetrics(SM_CYVIRTUALSCREEN);
+        let pw = GetSystemMetrics(SM_CXSCREEN);
 
-        let mut lx = cx + 22;
-        let mut ly = cy + 22;
+        let primary_origin_x = -vx;
+        let primary_origin_y = -vy;
 
-        if lx + pill_width > vx + vw - 12 {
-            lx = cx - pill_width - 12; // Flip to left of cursor if near right screen edge
-        }
-        if ly + pill_height > vy + vh - 12 {
-            ly = cy - pill_height - 12; // Flip above cursor if near bottom screen edge
-        }
+        // Positioned at top-center of primary screen with 16px top margin
+        let container_x = (primary_origin_x + (pw - container_width) / 2).clamp(vx.abs() + 16, w - container_width - 16);
+        let container_y = (primary_origin_y + 16).clamp(16, h - container_height - 16);
 
-        lx = lx.clamp(vx + 6, vx + vw - pill_width - 6);
-        ly = ly.clamp(vy + 6, vy + vh - pill_height - 6);
+        // Dark container background (#141720) with 1px #686DF6 border
+        let bg_brush = CreateSolidBrush(COLORREF(0x00201714));
+        let border_pen2 = CreatePen(PS_SOLID, 1, COLORREF(0x00F66D68));
+        let old_brush2 = SelectObject(hdc, bg_brush);
+        let old_pen2 = SelectObject(hdc, border_pen2);
 
-        // Dark rounded pill background
-        let pill_bg_brush = CreateSolidBrush(COLORREF(0x00201818)); // Deep dark blue-gray (RGB 24, 24, 32)
-        let pill_border_pen = CreatePen(PS_SOLID, 1, COLORREF(0x00F87C7C)); // #7C7CF8 accent border
-        let old_brush = SelectObject(hdc, pill_bg_brush);
-        let old_pen2 = SelectObject(hdc, pill_border_pen);
+        let _ = RoundRect(
+            hdc,
+            container_x,
+            container_y,
+            container_x + container_width,
+            container_y + container_height,
+            8,
+            8,
+        );
 
-        let _ = RoundRect(hdc, lx, ly, lx + pill_width, ly + pill_height, 8, 8);
-
-        // Glowing status dot inside pill
-        let dot_brush = CreateSolidBrush(COLORREF(0x00F87C7C));
-        let old_brush2 = SelectObject(hdc, dot_brush);
-        let dot_radius = 3;
-        let dot_cx = lx + 10;
-        let dot_cy = ly + pill_height / 2;
+        // Subtle glowing accent status dot
+        let dot_brush = CreateSolidBrush(COLORREF(0x00F66D68));
+        let old_dot_brush = SelectObject(hdc, dot_brush);
+        let dot_radius = 4;
+        let dot_cx = container_x + 14;
+        let dot_cy = container_y + container_height / 2;
         let _ = windows::Win32::Graphics::Gdi::Ellipse(
             hdc,
             dot_cx - dot_radius,
@@ -203,20 +194,20 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: HDC) {
             dot_cx + dot_radius,
             dot_cy + dot_radius,
         );
-        let _ = SelectObject(hdc, old_brush2);
+        let _ = SelectObject(hdc, old_dot_brush);
         let _ = DeleteObject(dot_brush);
 
-        // Crisp white/light-violet text
+        // Crisp off-white text (#F0F0FF)
         let _ = SetBkMode(hdc, TRANSPARENT);
-        let _ = SetTextColor(hdc, COLORREF(0x00F0F0FF)); // Crisp off-white
-        let text_x = lx + 18;
-        let text_y = ly + (pill_height - text_size.cy) / 2;
+        let _ = SetTextColor(hdc, COLORREF(0x00F0F0FF));
+        let text_x = container_x + 24;
+        let text_y = container_y + (container_height - text_size.cy) / 2;
         let _ = TextOutW(hdc, text_x, text_y, &wide_text);
 
-        let _ = SelectObject(hdc, old_brush);
-        let _ = DeleteObject(pill_bg_brush);
+        let _ = SelectObject(hdc, old_brush2);
+        let _ = DeleteObject(bg_brush);
         let _ = SelectObject(hdc, old_pen2);
-        let _ = DeleteObject(pill_border_pen);
+        let _ = DeleteObject(border_pen2);
     }
 }
 
@@ -234,7 +225,7 @@ pub fn ensure_overlay_initialized() {
                     hInstance: HINSTANCE::default(),
                     hIcon: windows::Win32::UI::WindowsAndMessaging::HICON::default(),
                     hCursor: windows::Win32::UI::WindowsAndMessaging::HCURSOR::default(),
-                    hbrBackground: HBRUSH(GetStockObject(BLACK_BRUSH).0),
+                    hbrBackground: windows::Win32::Graphics::Gdi::HBRUSH::default(),
                     lpszMenuName: windows::core::PCWSTR::null(),
                     lpszClassName: class_name,
                 };
@@ -269,8 +260,9 @@ pub fn ensure_overlay_initialized() {
 
                 if let Ok(h) = hwnd {
                     if !h.0.is_null() {
-                        // Set black as transparent color key
-                        let _ = SetLayeredWindowAttributes(h, COLORREF(0x00000000), 255, LWA_COLORKEY);
+                        // Pure black colorkey (0x00000000) makes the entire interior 100% transparent.
+                        // Only the #686DF6 border and live activity container are visible.
+                        let _ = SetLayeredWindowAttributes(h, COLORREF(0), 0, LWA_COLORKEY);
                         set_overlay_hwnd(h);
                     }
                 }
@@ -285,11 +277,10 @@ pub fn ensure_overlay_initialized() {
     });
 }
 
-/// Set real-time activity label text to display near cursor.
-/// Stale backend events arriving after cancellation or when no session is active are rejected.
+/// Set real-time activity label text to display in the live activity container
 pub fn set_activity_text(text: impl Into<String>) {
     let text_str = text.into();
-    if !text_str.is_empty() && (!super::cursor::is_in_active_session() || super::hotkey::is_cancelled()) {
+    if super::hotkey::is_cancelled() {
         return;
     }
     {
@@ -320,13 +311,16 @@ pub fn clear_activity_text() {
     }
 }
 
-/// Show the overlay visual window (called when a desktop control session is active)
-pub fn show_overlay_ui() {
+/// Authoritative start of a desktop automation session.
+/// Shows the thin #686DF6 border and live activity container.
+pub fn start_desktop_automation() {
     if super::hotkey::is_cancelled() {
         return;
     }
     ensure_overlay_initialized();
+    AUTOMATION_SESSION_ACTIVE.store(true, Ordering::SeqCst);
     OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
+
     if let Some(hwnd) = get_overlay_hwnd() {
         unsafe {
             let _ = PostMessageW(hwnd, WM_SHOW_OVERLAY, WPARAM(0), LPARAM(0));
@@ -334,9 +328,13 @@ pub fn show_overlay_ui() {
     }
 }
 
-/// Hide the overlay visual window (called when all desktop control sessions have ended)
-pub fn hide_overlay_ui() {
+/// Authoritative end of desktop automation session.
+/// Immediately hides the border and activity container.
+pub fn stop_desktop_automation() {
+    AUTOMATION_SESSION_ACTIVE.store(false, Ordering::SeqCst);
     OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+    clear_activity_text();
+
     if let Some(hwnd) = get_overlay_hwnd() {
         unsafe {
             let _ = PostMessageW(hwnd, WM_HIDE_OVERLAY, WPARAM(0), LPARAM(0));
@@ -344,14 +342,36 @@ pub fn hide_overlay_ui() {
     }
 }
 
-/// Legacy/Explicit activation: delegates to cursor session acquisition
-pub fn show_overlay() {
-    let _ = super::cursor::replace_system_cursor();
+/// Check if a desktop automation session is currently running
+pub fn is_automation_active() -> bool {
+    AUTOMATION_SESSION_ACTIVE.load(Ordering::SeqCst) || OVERLAY_ACTIVE.load(Ordering::SeqCst)
 }
 
-/// Legacy/Explicit deactivation: delegates to forced cleanup
+/// Show overlay UI (delegates to start_desktop_automation)
+pub fn show_overlay_ui() {
+    start_desktop_automation();
+}
+
+/// Hide overlay UI (only hides if the overarching automation session has ended)
+pub fn hide_overlay_ui() {
+    if !AUTOMATION_SESSION_ACTIVE.load(Ordering::SeqCst) {
+        OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+        if let Some(hwnd) = get_overlay_hwnd() {
+            unsafe {
+                let _ = PostMessageW(hwnd, WM_HIDE_OVERLAY, WPARAM(0), LPARAM(0));
+            }
+        }
+    }
+}
+
+/// Explicit activation
+pub fn show_overlay() {
+    start_desktop_automation();
+}
+
+/// Explicit deactivation
 pub fn hide_overlay() {
-    super::cursor::force_restore_and_cleanup();
+    stop_desktop_automation();
 }
 
 /// Check if the AI control overlay is currently visible
@@ -359,36 +379,78 @@ pub fn is_overlay_active() -> bool {
     OVERLAY_ACTIVE.load(Ordering::Relaxed)
 }
 
-/// Update pointer position on overlay
+/// Update intended target coordinates (tracked for diagnostics, real cursor is untouched)
+pub fn update_target_position(x: i32, y: i32) {
+    LAST_TARGET_X.store(x, Ordering::Relaxed);
+    LAST_TARGET_Y.store(y, Ordering::Relaxed);
+}
+
+/// Update pointer coordinates (tracked for diagnostics, real cursor is untouched)
 pub fn update_pointer(x: i32, y: i32) {
-    notify_cursor_idle(x, y);
+    LAST_TARGET_X.store(x, Ordering::Relaxed);
+    LAST_TARGET_Y.store(y, Ordering::Relaxed);
 }
 
-/// Notify the overlay of cursor movement. Stale events ignored if no active session.
+
+/// Notify cursor moved (updates target position for diagnostics; custom cursor rendering is removed)
 pub fn notify_cursor_moved(x: i32, y: i32) {
-    CURSOR_X.store(x, Ordering::Relaxed);
-    CURSOR_Y.store(y, Ordering::Relaxed);
-
-    if OVERLAY_ACTIVE.load(Ordering::Relaxed) && super::cursor::is_in_active_session() {
-        if let Some(hwnd) = get_overlay_hwnd() {
-            unsafe {
-                let _ = PostMessageW(hwnd, WM_UPDATE_OVERLAY, WPARAM(0), LPARAM(0));
-            }
-        }
-    }
+    update_target_position(x, y);
 }
 
-/// Notify the overlay of cursor arriving at target / becoming idle. Stale events ignored if no active session.
+/// Notify cursor idle (updates target position for diagnostics; custom cursor rendering is removed)
 pub fn notify_cursor_idle(x: i32, y: i32) {
-    CURSOR_X.store(x, Ordering::Relaxed);
-    CURSOR_Y.store(y, Ordering::Relaxed);
-
-    if OVERLAY_ACTIVE.load(Ordering::Relaxed) && super::cursor::is_in_active_session() {
-        if let Some(hwnd) = get_overlay_hwnd() {
-            unsafe {
-                let _ = PostMessageW(hwnd, WM_UPDATE_OVERLAY, WPARAM(0), LPARAM(0));
-            }
-        }
-    }
+    update_target_position(x, y);
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_idle_visibility_initially_hidden() {
+        assert_eq!(AUTOMATION_SESSION_ACTIVE.load(Ordering::SeqCst), false);
+    }
+
+    #[test]
+    fn test_session_start_and_stop_lifecycle() {
+        start_desktop_automation();
+        assert!(is_automation_active());
+
+        set_activity_text("Analyzing screen");
+        {
+            let guard = get_activity_label().lock().unwrap();
+            assert_eq!(*guard, "Analyzing screen");
+        }
+
+        stop_desktop_automation();
+        assert!(!is_automation_active());
+        {
+            let guard = get_activity_label().lock().unwrap();
+            assert!(guard.is_empty());
+        }
+    }
+
+    #[test]
+    fn test_multiple_consecutive_tool_calls_preserve_active_session() {
+        start_desktop_automation();
+        assert!(is_automation_active());
+
+        // An individual tool attempt to hide should be a no-op while session is active
+        hide_overlay_ui();
+        assert!(is_automation_active());
+
+        set_activity_text("Clicking Save");
+        assert!(is_automation_active());
+
+        // Only explicit stop terminates the session
+        stop_desktop_automation();
+        assert!(!is_automation_active());
+    }
+
+    #[test]
+    fn test_target_position_updating() {
+        update_target_position(500, 300);
+        assert_eq!(LAST_TARGET_X.load(Ordering::Relaxed), 500);
+        assert_eq!(LAST_TARGET_Y.load(Ordering::Relaxed), 300);
+    }
+}

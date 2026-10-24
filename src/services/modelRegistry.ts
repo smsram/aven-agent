@@ -8,6 +8,7 @@ export interface ModelMetadata {
   provider: string;
   contextLimit: string;
   description: string;
+  supportsVision?: boolean;
 }
 
 export const SUPPORTED_MODELS: ModelMetadata[] = [
@@ -17,6 +18,15 @@ export const SUPPORTED_MODELS: ModelMetadata[] = [
     provider: 'Cloudflare Workers AI',
     contextLimit: '128K tokens',
     description: 'Google Gemma 4 mixture-of-experts model (26B total, 4B active). Native reasoning, tool calling, and streaming.',
+    supportsVision: false,
+  },
+  {
+    id: '@cf/meta/llama-3.2-11b-vision-instruct',
+    name: 'Llama 3.2 11B Vision',
+    provider: 'Cloudflare Workers AI',
+    contextLimit: '128K tokens',
+    description: 'Meta Llama 3.2 11B multimodal vision model. Direct visual desktop screenshot inspection and tool calling.',
+    supportsVision: true,
   },
   {
     id: '@cf/qwen/qwen3.8-27b',
@@ -24,6 +34,7 @@ export const SUPPORTED_MODELS: ModelMetadata[] = [
     provider: 'Cloudflare Workers AI',
     contextLimit: '32K tokens',
     description: 'Qwen 3.8 27B dense model. High speed reasoning and function calling.',
+    supportsVision: false,
   },
 ];
 

@@ -53,23 +53,30 @@ pub fn mask_secret(secret: &str) -> String {
 /// - Rejects internal whitespace inside individual keys.
 /// - Returns at least one key on success.
 pub fn parse_and_validate_keys(raw: &str) -> Result<Vec<String>, String> {
-    let keys: Vec<String> = raw
-        .split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect();
-
-    if keys.is_empty() {
+    let raw_trimmed = raw.trim();
+    if raw_trimmed.is_empty() {
         return Err("No API keys provided. Please enter at least one valid API key.".to_string());
     }
 
-    for (i, key) in keys.iter().enumerate() {
-        if key.contains(' ') {
+    let mut keys: Vec<String> = Vec::new();
+    for (i, token) in raw.split([',', '\n', '\r']).enumerate() {
+        let trimmed = token.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if trimmed.contains(' ') {
             return Err(format!(
                 "API key #{} contains invalid internal whitespace.",
                 i + 1
             ));
         }
+        if !keys.iter().any(|k| k == trimmed) {
+            keys.push(trimmed.to_string());
+        }
+    }
+
+    if keys.is_empty() {
+        return Err("No API keys provided. Please enter at least one valid API key.".to_string());
     }
 
     Ok(keys)
@@ -311,8 +318,18 @@ mod tests {
         let res = parse_and_validate_keys(raw).unwrap();
         assert_eq!(res, vec!["sk-key1", "sk-key2", "sk-key3"]);
 
+        // Newline and carriage return support
+        let newline_raw = "sk-key1\nsk-key2\r\nsk-key3\n\n";
+        let newline_res = parse_and_validate_keys(newline_raw).unwrap();
+        assert_eq!(newline_res, vec!["sk-key1", "sk-key2", "sk-key3"]);
+
+        // Mixed delimiters and deduplication
+        let mixed_raw = "sk-key1, \nsk-key2\r\n, sk-key1, sk-key3";
+        let mixed_res = parse_and_validate_keys(mixed_raw).unwrap();
+        assert_eq!(mixed_res, vec!["sk-key1", "sk-key2", "sk-key3"]);
+
         assert!(parse_and_validate_keys("").is_err());
-        assert!(parse_and_validate_keys("  , , ").is_err());
+        assert!(parse_and_validate_keys("  , , \n\r ").is_err());
         assert!(parse_and_validate_keys("key1, key 2 with space").is_err());
     }
 

@@ -1,0 +1,1750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aven Logo — SVG Vector Preview &amp; Separation Workspace</title>
+  <meta name="description" content="Standalone offline vector preview workspace for the Aven logo, featuring exact component separation, side-by-side comparison, and alignment inspection.">
+  <style>
+    :root {
+      --brand-color: #686DF6;
+      --brand-glow: rgba(104, 109, 246, 0.35);
+      --bg-dark: #090d16;
+      --bg-card: #111726;
+      --bg-card-hover: #161e31;
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-highlight: rgba(104, 109, 246, 0.4);
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-faint: #64748b;
+      --radius-sm: 6px;
+      --radius-md: 10px;
+      --radius-lg: 16px;
+      --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      --font-mono: ui-monospace, "Cascadia Code", "SFMono-Regular", Consolas, Menlo, monospace;
+      
+      /* Active canvas background variable */
+      --canvas-bg: #0b1120;
+      --canvas-grid: rgba(255, 255, 255, 0.05);
+      --zoom-factor: 1;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: var(--font-family);
+      line-height: 1.5;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-x: hidden;
+    }
+
+    /* Top Navigation */
+    header {
+      background: rgba(17, 23, 38, 0.85);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border-color);
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      padding: 0.85rem 1.5rem;
+    }
+
+    .header-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .brand-group {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: rgba(104, 109, 246, 0.15);
+      border: 1px solid var(--border-highlight);
+      border-radius: var(--radius-sm);
+      padding: 4px;
+    }
+
+    .brand-title {
+      font-size: 1.15rem;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brand-title .accent {
+      color: var(--brand-color);
+    }
+
+    .badge-offline {
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #34d399;
+      font-size: 0.72rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      padding: 0.2rem 0.55rem;
+      border-radius: 9999px;
+    }
+
+    .badge-exact {
+      background: rgba(104, 109, 246, 0.15);
+      border: 1px solid var(--border-highlight);
+      color: #a5b4fc;
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      padding: 0.2rem 0.55rem;
+      border-radius: 9999px;
+    }
+
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .nav-btn {
+      color: var(--text-muted);
+      text-decoration: none;
+      font-size: 0.825rem;
+      font-weight: 500;
+      padding: 0.35rem 0.75rem;
+      border-radius: var(--radius-sm);
+      transition: all 0.15s ease;
+      background: transparent;
+      border: 1px solid transparent;
+    }
+
+    .nav-btn:hover {
+      color: #ffffff;
+      background: rgba(255, 255, 255, 0.06);
+    }
+
+    .nav-btn.active {
+      color: #ffffff;
+      background: rgba(104, 109, 246, 0.2);
+      border-color: var(--border-highlight);
+    }
+
+    /* Global Controls Toolbar */
+    .toolbar-section {
+      background: #0f1524;
+      border-bottom: 1px solid var(--border-color);
+      padding: 0.75rem 1.5rem;
+    }
+
+    .toolbar-inner {
+      max-width: 1400px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 1.25rem;
+    }
+
+    .toolbar-group {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
+    .toolbar-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-faint);
+    }
+
+    .btn-group {
+      display: inline-flex;
+      background: rgba(0, 0, 0, 0.35);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 2px;
+      gap: 2px;
+    }
+
+    .btn-tool {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      padding: 0.35rem 0.7rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      border-radius: 4px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.35rem;
+      transition: all 0.15s ease;
+    }
+
+    .btn-tool:hover {
+      color: var(--text-main);
+      background: rgba(255, 255, 255, 0.08);
+    }
+
+    .btn-tool.active {
+      color: #ffffff;
+      background: var(--brand-color);
+      box-shadow: 0 1px 4px rgba(0,0,0,0.3);
+    }
+
+    .zoom-display {
+      font-family: var(--font-mono);
+      font-size: 0.825rem;
+      color: #cbd5e1;
+      min-width: 45px;
+      text-align: center;
+      font-weight: 600;
+      padding: 0 0.25rem;
+    }
+
+    /* Main Container */
+    main {
+      flex: 1;
+      max-width: 1400px;
+      width: 100%;
+      margin: 0 auto;
+      padding: 2rem 1.5rem 4rem;
+      display: flex;
+      flex-direction: column;
+      gap: 3rem;
+    }
+
+    /* Section Headers */
+    .section-header {
+      margin-bottom: 1.25rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-end;
+      flex-wrap: wrap;
+      gap: 0.75rem;
+    }
+
+    .section-title {
+      font-size: 1.35rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+    }
+
+    .section-subtitle {
+      font-size: 0.875rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+    }
+
+    .section-tag {
+      font-family: var(--font-mono);
+      font-size: 0.75rem;
+      color: var(--text-faint);
+      background: rgba(255, 255, 255, 0.04);
+      padding: 0.25rem 0.6rem;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-color);
+    }
+
+    /* Grid layout for cards */
+    .preview-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(380px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .preview-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      transition: border-color 0.2s ease, box-shadow 0.2s ease;
+    }
+
+    .preview-card:hover {
+      border-color: rgba(255, 255, 255, 0.16);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+
+    .preview-card-header {
+      padding: 1rem 1.25rem;
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: rgba(255, 255, 255, 0.02);
+    }
+
+    .card-title-group h3 {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    .card-title-group p {
+      font-size: 0.775rem;
+      color: var(--text-muted);
+      font-family: var(--font-mono);
+    }
+
+    /* Canvas Viewport */
+    .canvas-viewport {
+      position: relative;
+      width: 100%;
+      height: 320px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: var(--canvas-bg);
+      transition: background-color 0.2s ease;
+    }
+
+    /* Background Modes */
+    .canvas-viewport.bg-dark {
+      background-color: #0b1120;
+    }
+
+    .canvas-viewport.bg-light {
+      background-color: #f8fafc;
+    }
+
+    .canvas-viewport.bg-checker {
+      background-color: #1e293b;
+      background-image:
+        linear-gradient(45deg, #0f172a 25%, transparent 25%),
+        linear-gradient(-45deg, #0f172a 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #0f172a 75%),
+        linear-gradient(-45deg, transparent 75%, #0f172a 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    }
+
+    .canvas-viewport.bg-checker-light {
+      background-color: #ffffff;
+      background-image:
+        linear-gradient(45deg, #e2e8f0 25%, transparent 25%),
+        linear-gradient(-45deg, #e2e8f0 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, #e2e8f0 75%),
+        linear-gradient(-45deg, transparent 75%, #e2e8f0 75%);
+      background-size: 20px 20px;
+      background-position: 0 0, 0 10px, 10px -10px, -10px 0;
+    }
+
+    .svg-stage {
+      width: 220px;
+      height: 220px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transform: scale(var(--zoom-factor));
+      transform-origin: center center;
+      transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
+      position: relative;
+    }
+
+    .svg-stage.wide-stage {
+      width: 330px;
+      height: 220px;
+    }
+
+    .svg-stage svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      filter: drop-shadow(0 4px 16px rgba(0, 0, 0, 0.15));
+    }
+
+    /* Dimension Guides */
+    .guide-box {
+      position: absolute;
+      inset: 0;
+      border: 1px dashed rgba(104, 109, 246, 0.35);
+      pointer-events: none;
+      display: none;
+    }
+
+    .show-guides .guide-box {
+      display: block;
+    }
+
+    .guide-label {
+      position: absolute;
+      bottom: -18px;
+      right: 0;
+      font-size: 10px;
+      font-family: var(--font-mono);
+      color: var(--brand-color);
+      opacity: 0.8;
+    }
+
+    /* Card Details Footer */
+    .preview-card-body {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      background: var(--bg-card);
+      flex: 1;
+    }
+
+    .meta-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+      gap: 0.6rem;
+    }
+
+    .meta-item {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 0.5rem 0.65rem;
+    }
+
+    .meta-item-title {
+      font-size: 0.68rem;
+      color: var(--text-faint);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.15rem;
+    }
+
+    .meta-item-value {
+      font-family: var(--font-mono);
+      font-size: 0.825rem;
+      color: #e2e8f0;
+      font-weight: 500;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .color-swatch {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 2px;
+      background-color: var(--brand-color);
+      margin-right: 4px;
+      vertical-align: middle;
+      border: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .card-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: auto;
+      padding-top: 0.5rem;
+    }
+
+    .btn-action {
+      flex: 1;
+      padding: 0.55rem 0.85rem;
+      font-size: 0.8rem;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-color);
+      background: rgba(255, 255, 255, 0.04);
+      color: var(--text-main);
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      text-decoration: none;
+      transition: all 0.15s ease;
+    }
+
+    .btn-action:hover {
+      background: rgba(255, 255, 255, 0.09);
+      border-color: rgba(255, 255, 255, 0.2);
+    }
+
+    .btn-action.btn-primary {
+      background: rgba(104, 109, 246, 0.2);
+      border-color: var(--border-highlight);
+      color: #c7d2fe;
+    }
+
+    .btn-action.btn-primary:hover {
+      background: var(--brand-color);
+      color: #ffffff;
+    }
+
+    /* Section: Overlay Comparison Detailed Layout */
+    .overlay-container {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 1.5rem;
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 2rem;
+    }
+
+    @media (max-width: 960px) {
+      .overlay-container {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .overlay-stage-wrapper {
+      position: relative;
+      background: var(--canvas-bg);
+      border-radius: var(--radius-md);
+      border: 1px solid var(--border-color);
+      height: 440px;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .overlay-viewport {
+      width: 300px;
+      height: 300px;
+      position: relative;
+      transform: scale(var(--zoom-factor));
+      transform-origin: center center;
+      transition: transform 0.15s cubic-bezier(0.2, 0, 0, 1);
+    }
+
+    .overlay-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      transition: opacity 0.15s ease;
+    }
+
+    .overlay-layer svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    /* Difference blend mode */
+    .difference-mode .layer-original svg path {
+      fill: #00ffff !important;
+    }
+    .difference-mode .layer-combined svg path {
+      fill: #ff00ff !important;
+      mix-blend-mode: screen;
+    }
+
+    .overlay-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
+    }
+
+    .control-box {
+      background: rgba(0, 0, 0, 0.25);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1.15rem;
+    }
+
+    .control-box-title {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 0.85rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .slider-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.775rem;
+      color: var(--text-muted);
+    }
+
+    .slider-header span:last-child {
+      font-family: var(--font-mono);
+      font-weight: 600;
+      color: #ffffff;
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 100%;
+      height: 6px;
+      background: rgba(255, 255, 255, 0.12);
+      border-radius: 3px;
+      outline: none;
+    }
+
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: var(--brand-color);
+      cursor: pointer;
+      box-shadow: 0 0 10px var(--brand-glow);
+    }
+
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.4rem 0;
+      font-size: 0.825rem;
+      color: #e2e8f0;
+      cursor: pointer;
+    }
+
+    .toggle-row input[type="checkbox"] {
+      accent-color: var(--brand-color);
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+
+    .status-pill {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: rgba(16, 185, 129, 0.1);
+      border: 1px solid rgba(16, 185, 129, 0.25);
+      border-radius: var(--radius-sm);
+      padding: 0.75rem 0.85rem;
+      font-size: 0.775rem;
+      color: #6ee7b7;
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background-color: #10b981;
+      box-shadow: 0 0 8px #10b981;
+      flex-shrink: 0;
+    }
+
+    /* Verification Section */
+    .checklist-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .checklist-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 1rem 1.15rem;
+      display: flex;
+      align-items: flex-start;
+      gap: 0.75rem;
+    }
+
+    .check-icon {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.35);
+      color: #10b981;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.75rem;
+      font-weight: bold;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .check-content h4 {
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: #ffffff;
+      margin-bottom: 0.2rem;
+    }
+
+    .check-content p {
+      font-size: 0.775rem;
+      color: var(--text-muted);
+    }
+
+    /* Code Snippets Accordion / Details */
+    details.code-details {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      overflow: hidden;
+      margin-top: 0.5rem;
+    }
+
+    details.code-details summary {
+      padding: 0.5rem 0.75rem;
+      font-size: 0.75rem;
+      font-family: var(--font-mono);
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+      background: rgba(255, 255, 255, 0.02);
+      transition: background 0.15s ease;
+    }
+
+    details.code-details summary:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+    }
+
+    details.code-details pre {
+      padding: 0.75rem;
+      font-family: var(--font-mono);
+      font-size: 0.72rem;
+      line-height: 1.45;
+      color: #cbd5e1;
+      background: #060911;
+      overflow-x: auto;
+      max-height: 140px;
+      white-space: pre-wrap;
+    }
+
+    /* Toast Notification */
+    .toast {
+      position: fixed;
+      bottom: 2rem;
+      right: 2rem;
+      background: #1e293b;
+      border: 1px solid var(--border-highlight);
+      color: #ffffff;
+      padding: 0.75rem 1.25rem;
+      border-radius: var(--radius-md);
+      font-size: 0.85rem;
+      box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      z-index: 1000;
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: all 0.25s ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+      pointer-events: auto;
+    }
+
+    /* Footer */
+    footer {
+      border-top: 1px solid var(--border-color);
+      background: #090d16;
+      padding: 1.5rem;
+      text-align: center;
+      font-size: 0.8rem;
+      color: var(--text-faint);
+    }
+
+    footer a {
+      color: var(--text-muted);
+      text-decoration: none;
+    }
+
+    footer a:hover {
+      color: var(--brand-color);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top Header -->
+  <header>
+    <div class="header-inner">
+      <div class="brand-group">
+        <div class="brand-icon">
+          <!-- Inline mini icon -->
+          <svg viewBox="0 0 237 238" width="100%" height="100%">
+            <path fill="#686DF6" d="M 30.2 14.8 C 17.5 8.8 11.4 15.2 15.6 28.8 L 76.0 223.5 C 78.8 232.2 88.2 232.0 93.4 223.8 L 100.8 212.0 C 106.5 202.8 106.4 187.5 101.8 175.0 L 77.2 108.5 C 72.8 96.5 80.5 84.0 95.8 84.0 C 100.2 84.0 105.0 85.8 109.2 88.5 L 165.0 124.2 C 174.5 130.2 188.5 131.5 198.8 126.8 L 213.8 120.0 C 222.5 116.0 222.5 106.5 213.5 102.2 L 30.2 14.8 Z M 101.5 100.2 C 94.0 95.4 88.2 100.2 91.2 108.5 L 115.2 173.2 C 117.4 179.0 121.8 179.2 124.8 173.8 L 130.2 164.2 C 133.5 158.5 138.8 153.8 144.8 151.0 L 156.8 145.5 C 161.8 143.2 161.8 138.8 156.8 135.6 L 101.5 100.2 Z" />
+          </svg>
+        </div>
+        <div class="brand-title">
+          <span>Aven <span class="accent">Logo</span> Studio</span>
+        </div>
+        <span class="badge-offline">100% Offline</span>
+        <span class="badge-exact">Exact Geometry</span>
+      </div>
+
+      <nav class="nav-links">
+        <a href="#complete-section" class="nav-btn">Complete Logo</a>
+        <a href="#components-section" class="nav-btn">Components</a>
+        <a href="#separated-section" class="nav-btn">Separated</a>
+        <a href="#overlay-section" class="nav-btn">Overlay Inspector</a>
+        <a href="#validation-section" class="nav-btn">Validation</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Global Controls Toolbar -->
+  <section class="toolbar-section">
+    <div class="toolbar-inner">
+      <!-- Background Mode -->
+      <div class="toolbar-group">
+        <span class="toolbar-label">Canvas Background:</span>
+        <div class="btn-group" id="bg-selector">
+          <button type="button" class="btn-tool active" data-bg="bg-dark" title="Dark Slate Background">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#0b1120; border:1px solid #475569;"></span>
+            Dark
+          </button>
+          <button type="button" class="btn-tool" data-bg="bg-light" title="Light Background">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:50%; background:#f8fafc; border:1px solid #cbd5e1;"></span>
+            Light
+          </button>
+          <button type="button" class="btn-tool" data-bg="bg-checker" title="Dark Checkerboard Grid">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:2px; background:repeating-conic-gradient(#334155 0% 25%, #0f172a 0% 50%) 50%/8px 8px;"></span>
+            Checkerboard
+          </button>
+          <button type="button" class="btn-tool" data-bg="bg-checker-light" title="Light Checkerboard Grid">
+            <span style="display:inline-block; width:10px; height:10px; border-radius:2px; background:repeating-conic-gradient(#cbd5e1 0% 25%, #ffffff 0% 50%) 50%/8px 8px;"></span>
+            Light Grid
+          </button>
+        </div>
+      </div>
+
+      <!-- Zoom Controls -->
+      <div class="toolbar-group">
+        <span class="toolbar-label">Scale &amp; Zoom:</span>
+        <div class="btn-group">
+          <button type="button" class="btn-tool" id="btn-zoom-out" title="Zoom Out (-15%)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+          <span class="zoom-display" id="zoom-label">100%</span>
+          <button type="button" class="btn-tool" id="btn-zoom-in" title="Zoom In (+15%)">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+          </button>
+          <button type="button" class="btn-tool" id="btn-zoom-reset" title="Reset Zoom to 100%">
+            Reset
+          </button>
+        </div>
+
+        <div class="btn-group">
+          <button type="button" class="btn-tool" data-zoom="0.5">50%</button>
+          <button type="button" class="btn-tool active" data-zoom="1.0">100%</button>
+          <button type="button" class="btn-tool" data-zoom="1.5">150%</button>
+          <button type="button" class="btn-tool" data-zoom="2.0">200%</button>
+        </div>
+      </div>
+
+      <!-- View Helpers -->
+      <div class="toolbar-group">
+        <span class="toolbar-label">Inspect:</span>
+        <button type="button" class="btn-tool" id="btn-toggle-guides" title="Toggle Bounding Box Guides">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2" stroke-dasharray="4 4"></rect></svg>
+          Guides
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Main Content Body -->
+  <main>
+
+    <!-- SECTION 1: Original Complete Logo -->
+    <section id="complete-section">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"></circle><polygon points="12 8 8 12 12 16 16 12 12 8"></polygon></svg>
+            1. Original Complete Aven Logo
+          </h2>
+          <p class="section-subtitle">Original master vector graphic loaded directly from supplied path geometry without alteration.</p>
+        </div>
+        <span class="section-tag">aven.svg</span>
+      </div>
+
+      <div class="preview-grid" style="grid-template-columns: 1fr;">
+        <div class="preview-card">
+          <div class="preview-card-header">
+            <div class="card-title-group">
+              <h3>aven.svg</h3>
+              <p>Combined path (Subpath 1 + Subpath 2) &bull; fill-rule: nonzero</p>
+            </div>
+            <span class="badge-exact">viewBox: 0 0 237 238</span>
+          </div>
+
+          <div class="canvas-viewport bg-dark">
+            <div class="svg-stage" id="stage-original">
+              <div class="guide-box"><span class="guide-label">237 &times; 238</span></div>
+              <!-- INLINE EXACT SVG -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+                <path id="aven-logo-complete" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z
+       M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+              </svg>
+            </div>
+          </div>
+
+          <div class="preview-card-body">
+            <div class="meta-row">
+              <div class="meta-item">
+                <div class="meta-item-title">Path ID</div>
+                <div class="meta-item-value">aven-logo-complete</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Fill Color</div>
+                <div class="meta-item-value"><span class="color-swatch"></span>#686DF6</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">ViewBox</div>
+                <div class="meta-item-value">0 0 237 238</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Subpaths</div>
+                <div class="meta-item-value">2 Closed Loops</div>
+              </div>
+            </div>
+
+            <details class="code-details">
+              <summary>View Exact SVG Source Code</summary>
+              <pre>&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%"&gt;
+  &lt;path id="aven-logo-complete" fill="#686DF6" d="M 30.2 14.8 C 17.5 8.8 11.4 15.2 15.6 28.8 L 76.0 223.5 C 78.8 232.2 88.2 232.0 93.4 223.8 L 100.8 212.0 C 106.5 202.8 106.4 187.5 101.8 175.0 L 77.2 108.5 C 72.8 96.5 80.5 84.0 95.8 84.0 C 100.2 84.0 105.0 85.8 109.2 88.5 L 165.0 124.2 C 174.5 130.2 188.5 131.5 198.8 126.8 L 213.8 120.0 C 222.5 116.0 222.5 106.5 213.5 102.2 L 30.2 14.8 Z M 101.5 100.2 C 94.0 95.4 88.2 100.2 91.2 108.5 L 115.2 173.2 C 117.4 179.0 121.8 179.2 124.8 173.8 L 130.2 164.2 C 133.5 158.5 138.8 153.8 144.8 151.0 L 156.8 145.5 C 161.8 143.2 161.8 138.8 156.8 135.6 L 101.5 100.2 Z" /&gt;
+&lt;/svg&gt;</pre>
+            </details>
+
+            <div class="card-actions">
+              <button type="button" class="btn-action btn-copy" data-target="aven.svg">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy SVG
+              </button>
+              <a href="aven.svg" download="aven.svg" class="btn-action btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download aven.svg
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 2 & 3: Separated Components (Outer & Inner) -->
+    <section id="components-section">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"></rect><rect x="14" y="3" width="7" height="7"></rect><rect x="14" y="14" width="7" height="7"></rect><rect x="3" y="14" width="7" height="7"></rect></svg>
+            2 &amp; 3. Separated Outer &amp; Inner Shapes
+          </h2>
+          <p class="section-subtitle">Extracted into two independently editable SVG components, each preserving exact relative coordinates.</p>
+        </div>
+      </div>
+
+      <div class="preview-grid">
+        <!-- Outer Silhouette Card -->
+        <div class="preview-card">
+          <div class="preview-card-header">
+            <div class="card-title-group">
+              <h3>Outer Component</h3>
+              <p>aven-outer.svg &bull; Silhouette Subpath 1</p>
+            </div>
+            <span class="badge-exact">viewBox: 0 0 237 238</span>
+          </div>
+
+          <div class="canvas-viewport bg-dark">
+            <div class="svg-stage" id="stage-outer">
+              <div class="guide-box"><span class="guide-label">237 &times; 238</span></div>
+              <!-- INLINE OUTER SVG -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+                <path id="aven-outer-silhouette" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z" />
+              </svg>
+            </div>
+          </div>
+
+          <div class="preview-card-body">
+            <div class="meta-row">
+              <div class="meta-item">
+                <div class="meta-item-title">Path ID</div>
+                <div class="meta-item-value">aven-outer-silhouette</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Fill Color</div>
+                <div class="meta-item-value"><span class="color-swatch"></span>#686DF6</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Start Point</div>
+                <div class="meta-item-value">M 30.2 14.8</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Close Point</div>
+                <div class="meta-item-value">L 30.2 14.8 Z</div>
+              </div>
+            </div>
+
+            <details class="code-details">
+              <summary>View Outer SVG Source Code</summary>
+              <pre>&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%"&gt;
+  &lt;path id="aven-outer-silhouette" fill="#686DF6" d="M 30.2 14.8 C 17.5 8.8 11.4 15.2 15.6 28.8 L 76.0 223.5 C 78.8 232.2 88.2 232.0 93.4 223.8 L 100.8 212.0 C 106.5 202.8 106.4 187.5 101.8 175.0 L 77.2 108.5 C 72.8 96.5 80.5 84.0 95.8 84.0 C 100.2 84.0 105.0 85.8 109.2 88.5 L 165.0 124.2 C 174.5 130.2 188.5 131.5 198.8 126.8 L 213.8 120.0 C 222.5 116.0 222.5 106.5 213.5 102.2 L 30.2 14.8 Z" /&gt;
+&lt;/svg&gt;</pre>
+            </details>
+
+            <div class="card-actions">
+              <button type="button" class="btn-action btn-copy" data-target="aven-outer.svg">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy SVG
+              </button>
+              <a href="aven-outer.svg" download="aven-outer.svg" class="btn-action btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download aven-outer.svg
+              </a>
+            </div>
+          </div>
+        </div>
+
+        <!-- Inner Shape Card -->
+        <div class="preview-card">
+          <div class="preview-card-header">
+            <div class="card-title-group">
+              <h3>Inner Component</h3>
+              <p>aven-inner.svg &bull; Internal Shape Subpath 2</p>
+            </div>
+            <span class="badge-exact">viewBox: 0 0 237 238</span>
+          </div>
+
+          <div class="canvas-viewport bg-dark">
+            <div class="svg-stage" id="stage-inner">
+              <div class="guide-box"><span class="guide-label">237 &times; 238</span></div>
+              <!-- INLINE INNER SVG -->
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+                <path id="aven-inner-shape" fill="#686DF6" d="M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+              </svg>
+            </div>
+          </div>
+
+          <div class="preview-card-body">
+            <div class="meta-row">
+              <div class="meta-item">
+                <div class="meta-item-title">Path ID</div>
+                <div class="meta-item-value">aven-inner-shape</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Fill Color</div>
+                <div class="meta-item-value"><span class="color-swatch"></span>#686DF6</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Start Point</div>
+                <div class="meta-item-value">M 101.5 100.2</div>
+              </div>
+              <div class="meta-item">
+                <div class="meta-item-title">Close Point</div>
+                <div class="meta-item-value">L 101.5 100.2 Z</div>
+              </div>
+            </div>
+
+            <details class="code-details">
+              <summary>View Inner SVG Source Code</summary>
+              <pre>&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%"&gt;
+  &lt;path id="aven-inner-shape" fill="#686DF6" d="M 101.5 100.2 C 94.0 95.4 88.2 100.2 91.2 108.5 L 115.2 173.2 C 117.4 179.0 121.8 179.2 124.8 173.8 L 130.2 164.2 C 133.5 158.5 138.8 153.8 144.8 151.0 L 156.8 145.5 C 161.8 143.2 161.8 138.8 156.8 135.6 L 101.5 100.2 Z" /&gt;
+&lt;/svg&gt;</pre>
+            </details>
+
+            <div class="card-actions">
+              <button type="button" class="btn-action btn-copy" data-target="aven-inner.svg">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+                Copy SVG
+              </button>
+              <a href="aven-inner.svg" download="aven-inner.svg" class="btn-action btn-primary">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                Download aven-inner.svg
+              </a>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 4: Separated Side-by-Side Composition -->
+    <section id="separated-section">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12H3m9-9l9 9-9 9"></path></svg>
+            4. Separated Side-by-Side Composition
+          </h2>
+          <p class="section-subtitle">Outer silhouette and inner shape rendered side-by-side with horizontal offset &bull; Exact 1:1 scale preserved without path geometry modification.</p>
+        </div>
+        <span class="section-tag">aven-separated.svg</span>
+      </div>
+
+      <div class="preview-card">
+        <div class="preview-card-header">
+          <div class="card-title-group">
+            <h3>aven-separated.svg</h3>
+            <p>Outer at origin + Inner with horizontal translation (transform="translate(170, 0)")</p>
+          </div>
+          <span class="badge-exact">viewBox: 0 0 360 238</span>
+        </div>
+
+        <div class="canvas-viewport bg-dark" style="height: 340px;">
+          <div class="svg-stage wide-stage" id="stage-separated">
+            <div class="guide-box"><span class="guide-label">360 &times; 238</span></div>
+            <!-- INLINE SEPARATED SVG -->
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 238" width="100%" height="100%">
+              <path id="aven-outer-separated" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z" />
+              <g id="aven-inner-separated-group" transform="translate(170, 0)">
+                <path id="aven-inner-separated" fill="#686DF6" d="M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+              </g>
+            </svg>
+          </div>
+        </div>
+
+        <div class="preview-card-body">
+          <div class="meta-row">
+            <div class="meta-item">
+              <div class="meta-item-title">Outer Path ID</div>
+              <div class="meta-item-value">aven-outer-separated</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-item-title">Inner Group ID</div>
+              <div class="meta-item-value">aven-inner-separated-group</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-item-title">Translation (Inner)</div>
+              <div class="meta-item-value">&Delta;X = +170px, &Delta;Y = 0</div>
+            </div>
+            <div class="meta-item">
+              <div class="meta-item-title">Geometry Scale</div>
+              <div class="meta-item-value">1:1 Exact Match</div>
+            </div>
+          </div>
+
+          <details class="code-details">
+            <summary>View Separated SVG Source Code</summary>
+            <pre>&lt;svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 238" width="100%" height="100%"&gt;
+  &lt;path id="aven-outer-separated" fill="#686DF6" d="M 30.2 14.8 C 17.5 8.8 11.4 15.2 15.6 28.8 L 76.0 223.5 C 78.8 232.2 88.2 232.0 93.4 223.8 L 100.8 212.0 C 106.5 202.8 106.4 187.5 101.8 175.0 L 77.2 108.5 C 72.8 96.5 80.5 84.0 95.8 84.0 C 100.2 84.0 105.0 85.8 109.2 88.5 L 165.0 124.2 C 174.5 130.2 188.5 131.5 198.8 126.8 L 213.8 120.0 C 222.5 116.0 222.5 106.5 213.5 102.2 L 30.2 14.8 Z" /&gt;
+  &lt;g id="aven-inner-separated-group" transform="translate(170, 0)"&gt;
+    &lt;path id="aven-inner-separated" fill="#686DF6" d="M 101.5 100.2 C 94.0 95.4 88.2 100.2 91.2 108.5 L 115.2 173.2 C 117.4 179.0 121.8 179.2 124.8 173.8 L 130.2 164.2 C 133.5 158.5 138.8 153.8 144.8 151.0 L 156.8 145.5 C 161.8 143.2 161.8 138.8 156.8 135.6 L 101.5 100.2 Z" /&gt;
+  &lt;/g&gt;
+&lt;/svg&gt;</pre>
+          </details>
+
+          <div class="card-actions">
+            <button type="button" class="btn-action btn-copy" data-target="aven-separated.svg">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              Copy SVG
+            </button>
+            <a href="aven-separated.svg" download="aven-separated.svg" class="btn-action btn-primary">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+              Download aven-separated.svg
+            </a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 5: Overlay Alignment & Verification Inspector -->
+    <section id="overlay-section">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 2 7 12 12 22 7 12 2"></polygon><polyline points="2 17 12 22 22 17"></polyline><polyline points="2 12 12 17 22 12"></polyline></svg>
+            5. Overlay Alignment &amp; Inspection Comparison
+          </h2>
+          <p class="section-subtitle">Mathematical alignment test showing the original complete logo overlaid with the combined separated outer and inner paths.</p>
+        </div>
+      </div>
+
+      <div class="overlay-container">
+        <!-- Interactive Overlay Canvas Viewport -->
+        <div class="overlay-stage-wrapper canvas-viewport bg-dark" id="overlay-wrapper">
+          <div class="overlay-viewport" id="stage-overlay">
+            <div class="guide-box"><span class="guide-label">237 &times; 238</span></div>
+
+            <!-- Layer 1: Original SVG -->
+            <div class="overlay-layer layer-original" id="layer-original" style="opacity: 1;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+                <path id="inspect-original-path" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z
+       M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+              </svg>
+            </div>
+
+            <!-- Layer 2: Combined Outer + Inner Shapes in original coordinates -->
+            <div class="overlay-layer layer-combined" id="layer-combined" style="opacity: 0.85;">
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+                <path id="inspect-outer-path" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z" />
+                <path id="inspect-inner-path" fill="#686DF6" d="M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+              </svg>
+            </div>
+          </div>
+        </div>
+
+        <!-- Overlay Inspector Controls -->
+        <div class="overlay-controls">
+          <!-- Toggle Button -->
+          <div class="control-box">
+            <div class="control-box-title">
+              <span>Quick Flip Comparison</span>
+              <span style="font-size:0.7rem; color:var(--text-faint); font-family:var(--font-mono);">[Spacebar]</span>
+            </div>
+            <button type="button" class="btn-action btn-primary" id="btn-toggle-overlay" style="width: 100%; padding: 0.75rem;">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 4v6h6"></path><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>
+              Toggle Original &harr; Combined
+            </button>
+            <p style="font-size: 0.75rem; color: var(--text-muted); margin-top: 0.5rem; text-align: center;">
+              Currently viewing: <strong id="active-view-label" style="color: #ffffff;">Both (Overlaid)</strong>
+            </p>
+          </div>
+
+          <!-- Opacity Slider -->
+          <div class="control-box">
+            <div class="control-box-title">Overlay Opacity</div>
+            <div class="slider-group">
+              <div class="slider-header">
+                <span>Combined Layer Opacity</span>
+                <span id="opacity-val">85%</span>
+              </div>
+              <input type="range" id="slider-opacity" min="0" max="100" value="85">
+            </div>
+          </div>
+
+          <!-- Layer Toggles -->
+          <div class="control-box">
+            <div class="control-box-title">Layer Visibility</div>
+            <label class="toggle-row">
+              <span>Original Logo Layer</span>
+              <input type="checkbox" id="chk-original" checked>
+            </label>
+            <label class="toggle-row">
+              <span>Combined Layer (Outer + Inner)</span>
+              <input type="checkbox" id="chk-combined" checked>
+            </label>
+            <label class="toggle-row">
+              <span>Difference / Alignment Mode</span>
+              <input type="checkbox" id="chk-diff-mode">
+            </label>
+          </div>
+
+          <!-- Status badge -->
+          <div class="status-pill">
+            <div class="status-dot"></div>
+            <div>
+              <strong>100% Vector Parity Verified</strong>
+              <div style="font-size: 0.72rem; color: #a7f3d0; margin-top: 2px;">
+                Identical curve vertices &bull; 0px alignment delta
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- SECTION 6: Validation & Verification Checklist -->
+    <section id="validation-section">
+      <div class="section-header">
+        <div>
+          <h2 class="section-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path><polyline points="22 4 12 14.01 9 11.01"></polyline></svg>
+            6. Validation &amp; Specification Checklist
+          </h2>
+          <p class="section-subtitle">Formal confirmation that all technical constraints, geometry preservation, and offline requirements are satisfied.</p>
+        </div>
+      </div>
+
+      <div class="checklist-grid">
+        <div class="checklist-card">
+          <div class="check-icon">&#10003;</div>
+          <div class="check-content">
+            <h4>1. Exact Path Data Preserved</h4>
+            <p>Master <code>aven.svg</code> contains the exact supplied coordinate string, fill <code>#686DF6</code>, and viewBox <code>0 0 237 238</code> without modification.</p>
+          </div>
+        </div>
+
+        <div class="checklist-card">
+          <div class="check-icon">&#10003;</div>
+          <div class="check-content">
+            <h4>2. Outer Component Isolated</h4>
+            <p><code>aven-outer.svg</code> isolates Subpath 1 (<code>M 30.2 14.8</code> to <code>L 30.2 14.8 Z</code>) preserving identical scale and relative coordinates.</p>
+          </div>
+        </div>
+
+        <div class="checklist-card">
+          <div class="check-icon">&#10003;</div>
+          <div class="check-content">
+            <h4>3. Inner Component Isolated</h4>
+            <p><code>aven-inner.svg</code> isolates Subpath 2 (<code>M 101.5 100.2</code> to <code>L 101.5 100.2 Z</code>) in original relative space.</p>
+          </div>
+        </div>
+
+        <div class="checklist-card">
+          <div class="check-icon">&#10003;</div>
+          <div class="check-content">
+            <h4>4. Side-by-Side Composition</h4>
+            <p><code>aven-separated.svg</code> displays outer and inner shapes side-by-side with horizontal translation at 1:1 scale without geometry mutation.</p>
+          </div>
+        </div>
+
+        <div class="checklist-card">
+          <div class="check-icon">&#10003;</div>
+          <div class="check-content">
+            <h4>5. Pixel-Perfect Aligned Overlay</h4>
+            <p>Overlaying the outer and inner paths reproduces the original logo exactly with zero delta.</p>
+          </div>
+        </div>
+
+        <div class="checklist-card">
+          <div class="check-icon">&#10003;</div>
+          <div class="check-content">
+            <h4>6. Strict Offline Support</h4>
+            <p>Zero external fonts, CDNs, or network APIs. Works seamlessly when double-clicked via <code>file://</code> in Windows Explorer.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Toast Notification Container -->
+  <div class="toast" id="toast-message">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10b981" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    <span id="toast-text">SVG code copied to clipboard</span>
+  </div>
+
+  <!-- Footer -->
+  <footer>
+    <div style="max-width: 1400px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem;">
+      <div>Aven Logo Workspace &bull; Standalone Offline Vector Suite</div>
+      <div>Files: <code>aven.svg</code> &bull; <code>aven-outer.svg</code> &bull; <code>aven-inner.svg</code> &bull; <code>aven-separated.svg</code></div>
+    </div>
+  </footer>
+
+  <!-- Vanilla Offline JavaScript Logic -->
+  <script>
+    (function () {
+      'use strict';
+
+      // --- SVG Raw Data Dictionary for Quick Copy ---
+      const SVG_DATA = {
+        'aven.svg': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+  <path id="aven-logo-complete" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z
+       M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+</svg>`,
+
+        'aven-outer.svg': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+  <path id="aven-outer-silhouette" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z" />
+</svg>`,
+
+        'aven-inner.svg': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 237 238" width="100%" height="100%">
+  <path id="aven-inner-shape" fill="#686DF6" d="M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+</svg>`,
+
+        'aven-separated.svg': `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 238" width="100%" height="100%">
+  <path id="aven-outer-separated" fill="#686DF6" d="M 30.2 14.8
+       C 17.5 8.8 11.4 15.2 15.6 28.8
+       L 76.0 223.5
+       C 78.8 232.2 88.2 232.0 93.4 223.8
+       L 100.8 212.0
+       C 106.5 202.8 106.4 187.5 101.8 175.0
+       L 77.2 108.5
+       C 72.8 96.5 80.5 84.0 95.8 84.0
+       C 100.2 84.0 105.0 85.8 109.2 88.5
+       L 165.0 124.2
+       C 174.5 130.2 188.5 131.5 198.8 126.8
+       L 213.8 120.0
+       C 222.5 116.0 222.5 106.5 213.5 102.2
+       L 30.2 14.8 Z" />
+  <g id="aven-inner-separated-group" transform="translate(170, 0)">
+    <path id="aven-inner-separated" fill="#686DF6" d="M 101.5 100.2
+       C 94.0 95.4 88.2 100.2 91.2 108.5
+       L 115.2 173.2
+       C 117.4 179.0 121.8 179.2 124.8 173.8
+       L 130.2 164.2
+       C 133.5 158.5 138.8 153.8 144.8 151.0
+       L 156.8 145.5
+       C 161.8 143.2 161.8 138.8 156.8 135.6
+       L 101.5 100.2 Z" />
+  </g>
+</svg>`
+      };
+
+      // Toast notification helper
+      let toastTimer = null;
+      function showToast(text) {
+        const toast = document.getElementById('toast-message');
+        const toastText = document.getElementById('toast-text');
+        toastText.textContent = text;
+        toast.classList.add('show');
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          toast.classList.remove('show');
+        }, 2500);
+      }
+
+      // Copy SVG button handlers
+      document.querySelectorAll('.btn-copy').forEach(btn => {
+        btn.addEventListener('click', function () {
+          const target = this.getAttribute('data-target');
+          const code = SVG_DATA[target];
+          if (code) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+              navigator.clipboard.writeText(code).then(() => {
+                showToast(`Copied ${target} to clipboard!`);
+              }).catch(() => {
+                fallbackCopy(code, target);
+              });
+            } else {
+              fallbackCopy(code, target);
+            }
+          }
+        });
+      });
+
+      function fallbackCopy(text, name) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.left = '-9999px';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          showToast(`Copied ${name} to clipboard!`);
+        } catch (e) {
+          showToast(`Selected ${name} text`);
+        }
+        document.body.removeChild(ta);
+      }
+
+      // --- Background Mode Controls ---
+      const bgButtons = document.querySelectorAll('#bg-selector .btn-tool');
+      const viewports = document.querySelectorAll('.canvas-viewport');
+
+      bgButtons.forEach(btn => {
+        btn.addEventListener('click', function () {
+          bgButtons.forEach(b => b.classList.remove('active'));
+          this.classList.add('active');
+
+          const bgClass = this.getAttribute('data-bg');
+          viewports.forEach(vp => {
+            vp.classList.remove('bg-dark', 'bg-light', 'bg-checker', 'bg-checker-light');
+            vp.classList.add(bgClass);
+          });
+        });
+      });
+
+      // --- Zoom Controls ---
+      let currentZoom = 1.0;
+      const zoomLabel = document.getElementById('zoom-label');
+      const zoomPresetBtns = document.querySelectorAll('[data-zoom]');
+
+      function setZoom(val) {
+        currentZoom = Math.min(3.0, Math.max(0.25, Math.round(val * 100) / 100));
+        document.documentElement.style.setProperty('--zoom-factor', currentZoom);
+        zoomLabel.textContent = Math.round(currentZoom * 100) + '%';
+
+        zoomPresetBtns.forEach(btn => {
+          if (parseFloat(btn.getAttribute('data-zoom')) === currentZoom) {
+            btn.classList.add('active');
+          } else {
+            btn.classList.remove('active');
+          }
+        });
+      }
+
+      document.getElementById('btn-zoom-in').addEventListener('click', () => setZoom(currentZoom + 0.15));
+      document.getElementById('btn-zoom-out').addEventListener('click', () => setZoom(currentZoom - 0.15));
+      document.getElementById('btn-zoom-reset').addEventListener('click', () => setZoom(1.0));
+
+      zoomPresetBtns.forEach(btn => {
+        btn.addEventListener('click', function () {
+          const z = parseFloat(this.getAttribute('data-zoom'));
+          setZoom(z);
+        });
+      });
+
+      // --- Guide Lines Toggle ---
+      let guidesActive = false;
+      const btnToggleGuides = document.getElementById('btn-toggle-guides');
+      btnToggleGuides.addEventListener('click', function () {
+        guidesActive = !guidesActive;
+        document.body.classList.toggle('show-guides', guidesActive);
+        this.classList.toggle('active', guidesActive);
+      });
+
+      // --- Overlay Inspector Controls ---
+      const layerOriginal = document.getElementById('layer-original');
+      const layerCombined = document.getElementById('layer-combined');
+      const sliderOpacity = document.getElementById('slider-opacity');
+      const opacityVal = document.getElementById('opacity-val');
+      const chkOriginal = document.getElementById('chk-original');
+      const chkCombined = document.getElementById('chk-combined');
+      const chkDiffMode = document.getElementById('chk-diff-mode');
+      const btnToggleOverlay = document.getElementById('btn-toggle-overlay');
+      const activeViewLabel = document.getElementById('active-view-label');
+      const overlayWrapper = document.getElementById('overlay-wrapper');
+
+      // Opacity Slider
+      sliderOpacity.addEventListener('input', function () {
+        const val = this.value;
+        opacityVal.textContent = val + '%';
+        if (chkCombined.checked) {
+          layerCombined.style.opacity = (val / 100).toString();
+        }
+      });
+
+      // Layer checkboxes
+      chkOriginal.addEventListener('change', function () {
+        layerOriginal.style.display = this.checked ? 'block' : 'none';
+        updateActiveLabel();
+      });
+
+      chkCombined.addEventListener('change', function () {
+        layerCombined.style.display = this.checked ? 'block' : 'none';
+        if (this.checked) {
+          layerCombined.style.opacity = (sliderOpacity.value / 100).toString();
+        }
+        updateActiveLabel();
+      });
+
+      // Difference mode
+      chkDiffMode.addEventListener('change', function () {
+        overlayWrapper.classList.toggle('difference-mode', this.checked);
+        if (this.checked) {
+          showToast('Alignment Mode: cyan & magenta overlap');
+        }
+      });
+
+      function updateActiveLabel() {
+        if (chkOriginal.checked && chkCombined.checked) {
+          activeViewLabel.textContent = 'Both (Overlaid)';
+        } else if (chkOriginal.checked) {
+          activeViewLabel.textContent = 'Original Logo Only';
+        } else if (chkCombined.checked) {
+          activeViewLabel.textContent = 'Combined Separated Only';
+        } else {
+          activeViewLabel.textContent = 'None Visible';
+        }
+      }
+
+      // Quick Flip Toggle button (cycles: Both -> Original -> Combined -> Both)
+      let toggleState = 0;
+      function cycleOverlay() {
+        toggleState = (toggleState + 1) % 3;
+        if (toggleState === 0) {
+          chkOriginal.checked = true;
+          chkCombined.checked = true;
+          layerOriginal.style.display = 'block';
+          layerCombined.style.display = 'block';
+          layerCombined.style.opacity = (sliderOpacity.value / 100).toString();
+        } else if (toggleState === 1) {
+          chkOriginal.checked = true;
+          chkCombined.checked = false;
+          layerOriginal.style.display = 'block';
+          layerCombined.style.display = 'none';
+        } else if (toggleState === 2) {
+          chkOriginal.checked = false;
+          chkCombined.checked = true;
+          layerOriginal.style.display = 'none';
+          layerCombined.style.display = 'block';
+          layerCombined.style.opacity = '1';
+        }
+        updateActiveLabel();
+      }
+
+      btnToggleOverlay.addEventListener('click', cycleOverlay);
+
+      // Keyboard shortcut (Spacebar while on page or T)
+      window.addEventListener('keydown', function (e) {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+        if (e.code === 'Space' || e.key === 't' || e.key === 'T') {
+          e.preventDefault();
+          cycleOverlay();
+        }
+      });
+
+    })();
+  </script>
+</body>
+</html>

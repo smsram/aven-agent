@@ -30,14 +30,34 @@ fn set_api_key(provider: String, key: String) -> Result<(), String> {
     Ok(())
 }
 
+fn get_env_api_key(provider: &str) -> Option<String> {
+    match provider.to_lowercase().as_str() {
+        "anthropic" => std::env::var("ANTHROPIC_API_KEY").ok(),
+        "openai" => std::env::var("OPENAI_API_KEY").ok(),
+        "gemini" => std::env::var("GEMINI_API_KEY")
+            .or_else(|_| std::env::var("GOOGLE_API_KEY"))
+            .ok(),
+        "groq" => std::env::var("GROQ_API_KEY").ok(),
+        "openrouter" => std::env::var("OPENROUTER_API_KEY").ok(),
+        "cloudflare" => std::env::var("CLOUDFLARE_API_TOKEN")
+            .or_else(|_| std::env::var("CF_API_TOKEN"))
+            .or_else(|_| std::env::var("CLOUDFLARE_API_KEY"))
+            .or_else(|_| std::env::var("CF_API_KEY"))
+            .ok(),
+        _ => {
+            let var_name = format!("{}_API_KEY", provider.to_uppercase());
+            std::env::var(var_name).ok()
+        }
+    }
+}
+
 #[tauri::command]
 fn get_api_key(provider: String) -> Result<Option<String>, String> {
     let entry = Entry::new(SERVICE_NAME, &format!("api_key_{}", provider))
         .map_err(|e| format!("Failed to access keyring: {e}"))?;
     match entry.get_password() {
-        Ok(secret) => Ok(Some(secret)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Keyring error: {e}")),
+        Ok(secret) if !secret.trim().is_empty() => Ok(Some(secret)),
+        _ => Ok(get_env_api_key(&provider)),
     }
 }
 
@@ -46,9 +66,8 @@ fn has_api_key(provider: String) -> Result<bool, String> {
     let entry = Entry::new(SERVICE_NAME, &format!("api_key_{}", provider))
         .map_err(|e| format!("Failed to access keyring: {e}"))?;
     match entry.get_password() {
-        Ok(secret) => Ok(!secret.is_empty()),
-        Err(keyring::Error::NoEntry) => Ok(false),
-        Err(_) => Ok(false),
+        Ok(secret) if !secret.trim().is_empty() => Ok(true),
+        _ => Ok(get_env_api_key(&provider).is_some()),
     }
 }
 

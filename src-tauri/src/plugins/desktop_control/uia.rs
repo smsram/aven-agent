@@ -112,6 +112,58 @@ pub struct ElementMatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub caret_position: Option<usize>,
     pub bounding_rect: Option<super::windows::WindowRect>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_control_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_patterns: Vec<String>,
+}
+
+/// Retrieve parent element name and control type for container context
+pub fn get_parent_context(
+    uia: &IUIAutomation,
+    elem: &IUIAutomationElement,
+) -> (Option<String>, Option<String>) {
+    unsafe {
+        if let Ok(walker) = uia.ControlViewWalker() {
+            if let Ok(parent) = walker.GetParentElement(elem) {
+                let name = parent.CurrentName().map(|b| b.to_string()).ok().filter(|s| !s.trim().is_empty());
+                let ct = parent
+                    .CurrentControlType()
+                    .map(|id| control_type_to_string(id.0 as i32).to_string())
+                    .ok();
+                return (name, ct);
+            }
+        }
+    }
+    (None, None)
+}
+
+/// Query which standard control patterns are supported by this element
+pub fn get_supported_patterns(elem: &IUIAutomationElement) -> Vec<String> {
+    let mut patterns = Vec::new();
+    unsafe {
+        if elem.GetCurrentPattern(UIA_InvokePatternId).is_ok() {
+            patterns.push("Invoke".to_string());
+        }
+        if elem.GetCurrentPattern(UIA_ValuePatternId).is_ok() {
+            patterns.push("Value".to_string());
+        }
+        if elem.GetCurrentPattern(UIA_SelectionItemPatternId).is_ok() {
+            patterns.push("SelectionItem".to_string());
+        }
+        if elem.GetCurrentPattern(UIA_ExpandCollapsePatternId).is_ok() {
+            patterns.push("ExpandCollapse".to_string());
+        }
+        if elem.GetCurrentPattern(UIA_ScrollPatternId).is_ok() {
+            patterns.push("Scroll".to_string());
+        }
+        if elem.GetCurrentPattern(UIA_TextPatternId).is_ok() {
+            patterns.push("Text".to_string());
+        }
+    }
+    patterns
 }
 
 /// Retrieve text value using ValuePattern, document text using TextPattern,
@@ -428,19 +480,7 @@ pub fn find_elements(
 ) -> Result<Vec<ElementMatch>, String> {
     let uia = get_automation()?;
 
-    let hwnd = match target_hwnd {
-        Some(h) => HWND(h as *mut _),
-        None => unsafe { GetForegroundWindow() },
-    };
-
-    if hwnd.0.is_null() {
-        return Err("No valid window target found".to_string());
-    }
-
-    let root: IUIAutomationElement = unsafe {
-        uia.ElementFromHandle(hwnd)
-            .map_err(|e| format!("Failed to get element from handle: {e}"))?
-    };
+    let (root, _hwnd) = get_target_or_root_element(&uia, target_hwnd)?;
 
     let cond = unsafe {
         uia.CreateTrueCondition()
@@ -505,6 +545,9 @@ pub fn find_elements(
                         }
                     });
 
+                    let (parent_name, parent_control_type) = get_parent_context(&uia, &elem);
+                    let supported_patterns = get_supported_patterns(&elem);
+
                     matches.push(ElementMatch {
                         name,
                         control_type: ct_str.to_string(),
@@ -517,6 +560,9 @@ pub fn find_elements(
                         selected_text: content.selected_text,
                         caret_position: content.caret_position,
                         bounding_rect,
+                        parent_name,
+                        parent_control_type,
+                        supported_patterns,
                     });
                 }
             }
@@ -743,7 +789,7 @@ pub fn expand_collapse_element(
     ))
 }
 
-/// Internal helper to find a single element matching query
+/// Internal helper to find a single element matching query with ambiguity detection
 fn find_single_element_internal(
     root: &IUIAutomationElement,
     query: &str,
@@ -764,6 +810,9 @@ fn find_single_element_internal(
     let q_lower = query.to_lowercase();
     let ct_lower = control_type.map(|ct| ct.to_lowercase());
 
+    let mut exact_matches: Vec<(IUIAutomationElement, String, String, Option<RECT>)> = Vec::new();
+    let mut partial_matches: Vec<(IUIAutomationElement, String, String, Option<RECT>)> = Vec::new();
+
     for i in 0..total {
         unsafe {
             if let Ok(elem) = arr.GetElement(i) {
@@ -772,23 +821,85 @@ fn find_single_element_internal(
                 let ct_str = control_type_to_string(type_id);
                 let auto_id = elem.CurrentAutomationId().map(|b| b.to_string()).unwrap_or_default();
 
-                let mut matched = false;
-                if name.to_lowercase().contains(&q_lower) || auto_id.to_lowercase().contains(&q_lower) {
-                    matched = true;
-                }
-
                 if let Some(ref req_ct) = ct_lower {
                     if !ct_str.to_lowercase().contains(req_ct) {
-                        matched = false;
+                        continue;
                     }
                 }
 
-                if matched {
+                let name_lower = name.to_lowercase();
+                let id_lower = auto_id.to_lowercase();
+
+                let is_exact = name_lower == q_lower || (!id_lower.is_empty() && id_lower == q_lower);
+                let is_partial = name_lower.contains(&q_lower) || (!id_lower.is_empty() && id_lower.contains(&q_lower));
+
+                if is_exact {
                     let rect_opt = elem.CurrentBoundingRectangle().ok();
-                    return Ok((elem, name.is_empty().then(|| auto_id.clone()).unwrap_or(name), rect_opt));
+                    let display_name = if !name.is_empty() { name } else { auto_id };
+                    exact_matches.push((elem, display_name, ct_str.to_string(), rect_opt));
+                } else if is_partial {
+                    let rect_opt = elem.CurrentBoundingRectangle().ok();
+                    let display_name = if !name.is_empty() { name } else { auto_id };
+                    partial_matches.push((elem, display_name, ct_str.to_string(), rect_opt));
                 }
             }
         }
+    }
+
+    if exact_matches.len() == 1 {
+        let (elem, name, _ct, rect) = exact_matches.remove(0);
+        return Ok((elem, name, rect));
+    }
+
+    if exact_matches.len() > 1 {
+        let mut candidates = Vec::new();
+        for (idx, (elem, name, ct, rect)) in exact_matches.iter().enumerate().take(5) {
+            let (p_name, p_ct) = get_parent_context(&uia, elem);
+            let p_desc = match (p_name, p_ct) {
+                (Some(pn), Some(pct)) => format!(" [in {pct} '{pn}']"),
+                (Some(pn), None) => format!(" [in '{pn}']"),
+                _ => String::new(),
+            };
+            let rect_desc = match rect {
+                Some(r) => format!(" at ({}, {}, w: {}, h: {})", r.left, r.top, r.right - r.left, r.bottom - r.top),
+                None => String::new(),
+            };
+            candidates.push(format!("#{}: {} '{}'{}{}", idx + 1, ct, name, p_desc, rect_desc));
+        }
+        return Err(format!(
+            "Ambiguous UIA match: found {} exact matches for query '{}'. Candidate controls: {}. Disambiguate by narrowing control_type, parent container, or using vision coordinates.",
+            exact_matches.len(),
+            query,
+            candidates.join("; ")
+        ));
+    }
+
+    if partial_matches.len() == 1 {
+        let (elem, name, _ct, rect) = partial_matches.remove(0);
+        return Ok((elem, name, rect));
+    }
+
+    if partial_matches.len() > 1 {
+        let mut candidates = Vec::new();
+        for (idx, (elem, name, ct, rect)) in partial_matches.iter().enumerate().take(5) {
+            let (p_name, p_ct) = get_parent_context(&uia, elem);
+            let p_desc = match (p_name, p_ct) {
+                (Some(pn), Some(pct)) => format!(" [in {pct} '{pn}']"),
+                (Some(pn), None) => format!(" [in '{pn}']"),
+                _ => String::new(),
+            };
+            let rect_desc = match rect {
+                Some(r) => format!(" at ({}, {}, w: {}, h: {})", r.left, r.top, r.right - r.left, r.bottom - r.top),
+                None => String::new(),
+            };
+            candidates.push(format!("#{}: {} '{}'{}{}", idx + 1, ct, name, p_desc, rect_desc));
+        }
+        return Err(format!(
+            "Ambiguous UIA match: found {} partial matches for query '{}'. Candidate controls: {}. Disambiguate by using exact accessible name, control_type, or vision coordinates.",
+            partial_matches.len(),
+            query,
+            candidates.join("; ")
+        ));
     }
 
     Err(format!(
@@ -1160,3 +1271,243 @@ pub fn scroll_element_verified(
         "post_scroll": post_scroll,
     }))
 }
+
+/// Helper to obtain target window element or fallback to desktop root element
+fn get_target_or_root_element(
+    uia: &IUIAutomation,
+    target_hwnd: Option<i64>,
+) -> Result<(IUIAutomationElement, HWND), String> {
+    let hwnd = match target_hwnd {
+        Some(h) if h > 0 => HWND(h as *mut _),
+        _ => unsafe { GetForegroundWindow() },
+    };
+
+    let elem = if !hwnd.0.is_null() {
+        unsafe {
+            uia.ElementFromHandle(hwnd)
+                .or_else(|_| uia.GetRootElement())
+                .map_err(|e| format!("Failed to get window or root element: {e}"))?
+        }
+    } else {
+        unsafe {
+            uia.GetRootElement()
+                .map_err(|e| format!("GetRootElement failed: {e}"))?
+        }
+    };
+
+    Ok((elem, hwnd))
+}
+
+/// Targeted inspection of a specific window's actionable controls
+pub fn inspect_window_actionable_controls(
+    target_hwnd: Option<i64>,
+) -> Result<serde_json::Value, String> {
+    let uia = get_automation()?;
+    let (root, hwnd) = get_target_or_root_element(&uia, target_hwnd)?;
+
+    let title = unsafe {
+        root.CurrentName()
+            .map(|b| b.to_string())
+            .unwrap_or_else(|_| "Window".to_string())
+    };
+
+    let window_id_opt = if !hwnd.0.is_null() { Some(hwnd.0 as i64) } else { None };
+    let matches = find_elements(window_id_opt, None, None, Some(50))?;
+    let actionable: Vec<_> = matches
+        .into_iter()
+        .filter(|m| {
+            let ct = m.control_type.as_str();
+            ct == "Button"
+                || ct == "Edit"
+                || ct == "MenuItem"
+                || ct == "TabItem"
+                || ct == "ComboBox"
+                || ct == "CheckBox"
+                || ct == "RadioButton"
+                || ct == "Hyperlink"
+                || !m.name.is_empty()
+        })
+        .take(35)
+        .collect();
+
+    Ok(serde_json::json!({
+        "window_id": hwnd.0 as i64,
+        "window_title": title,
+        "actionable_control_count": actionable.len(),
+        "controls": actionable,
+    }))
+}
+
+/// Targeted query: read contents and caret information of an element or focused control
+pub fn read_element_text(
+    target_hwnd: Option<i64>,
+    query: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let uia = get_automation()?;
+    let (root, _hwnd) = get_target_or_root_element(&uia, target_hwnd)?;
+
+    let elem = if let Some(q) = query {
+        find_single_element_internal(&root, q, None).map(|(e, _, _)| e)?
+    } else {
+        unsafe {
+            uia.GetFocusedElement()
+                .unwrap_or_else(|_| root.clone())
+        }
+    };
+
+    let name = unsafe { elem.CurrentName().map(|b| b.to_string()).unwrap_or_default() };
+    let control_type_id = unsafe { elem.CurrentControlType().unwrap_or_default() };
+    let control_type = control_type_to_string(control_type_id.0);
+    let content = get_element_content(&elem);
+
+    let mut unsupported = Vec::new();
+    if content.pattern_used.as_deref() != Some("ValuePattern")
+        && content.pattern_used.as_deref() != Some("ValuePattern+TextPattern")
+    {
+        unsupported.push("ValuePattern");
+    }
+    if content.pattern_used.as_deref() != Some("TextPattern")
+        && content.pattern_used.as_deref() != Some("ValuePattern+TextPattern")
+    {
+        unsupported.push("TextPattern");
+    }
+
+    Ok(serde_json::json!({
+        "control_name": name,
+        "control_type": control_type,
+        "content": content,
+        "unsupported_patterns": unsupported,
+    }))
+}
+
+/// Targeted query: check focus, selection, enabled state, and current value
+pub fn check_element_state(
+    target_hwnd: Option<i64>,
+    query: Option<&str>,
+) -> Result<serde_json::Value, String> {
+    let uia = get_automation()?;
+    let (root, _hwnd) = get_target_or_root_element(&uia, target_hwnd)?;
+
+    let elem = if let Some(q) = query {
+        find_single_element_internal(&root, q, None).map(|(e, _, _)| e)?
+    } else {
+        unsafe {
+            uia.GetFocusedElement()
+                .unwrap_or_else(|_| root.clone())
+        }
+    };
+
+    let name = unsafe { elem.CurrentName().map(|b| b.to_string()).unwrap_or_default() };
+    let control_type_id = unsafe { elem.CurrentControlType().unwrap_or_default() };
+    let control_type = control_type_to_string(control_type_id.0);
+    let is_enabled = unsafe { elem.CurrentIsEnabled().map(|b| b.as_bool()).unwrap_or(false) };
+    let has_focus = unsafe { elem.CurrentHasKeyboardFocus().map(|b| b.as_bool()).unwrap_or(false) };
+    let content = get_element_content(&elem);
+    let rect_opt = unsafe {
+        elem.CurrentBoundingRectangle().ok().map(|r| super::windows::WindowRect {
+            x: r.left,
+            y: r.top,
+            width: r.right - r.left,
+            height: r.bottom - r.top,
+        })
+    };
+
+    Ok(serde_json::json!({
+        "control_name": name,
+        "control_type": control_type,
+        "is_enabled": is_enabled,
+        "has_keyboard_focus": has_focus,
+        "is_read_only": content.is_read_only,
+        "bounding_rect": rect_opt,
+        "value": content.value,
+        "text": content.text,
+        "caret_position": content.caret_position,
+        "selected_text": content.selected_text,
+    }))
+}
+
+/// Targeted query: obtain exact screen bounds and click center of an element
+pub fn get_element_bounds(
+    target_hwnd: Option<i64>,
+    query: &str,
+) -> Result<serde_json::Value, String> {
+    let uia = get_automation()?;
+    let (root, _hwnd) = get_target_or_root_element(&uia, target_hwnd)?;
+
+    let (_elem, name, rect) = find_single_element_internal(&root, query, None)?;
+    let r = rect.ok_or_else(|| format!("Control '{name}' has no bounding rectangle"))?;
+    let center_x = r.left + (r.right - r.left) / 2;
+    let center_y = r.top + (r.bottom - r.top) / 2;
+
+    Ok(serde_json::json!({
+        "control_name": name,
+        "bounds": {
+            "left": r.left,
+            "top": r.top,
+            "right": r.right,
+            "bottom": r.bottom,
+            "width": r.right - r.left,
+            "height": r.bottom - r.top,
+        },
+        "center_point": {
+            "x": center_x,
+            "y": center_y,
+        }
+    }))
+}
+
+/// Revalidate a previously identified UIA element against its expected bounds
+pub fn revalidate_element(
+    target_hwnd: Option<i64>,
+    query: &str,
+    expected_x: Option<i32>,
+    expected_y: Option<i32>,
+) -> Result<serde_json::Value, String> {
+    let uia = get_automation()?;
+    let (root, _hwnd) = get_target_or_root_element(&uia, target_hwnd)?;
+
+    match find_single_element_internal(&root, query, None) {
+        Ok((elem, name, rect_opt)) => {
+            let is_enabled = unsafe { elem.CurrentIsEnabled().map(|b| b.as_bool()).unwrap_or(false) };
+            if let Some(r) = rect_opt {
+                let current_cx = r.left + (r.right - r.left) / 2;
+                let current_cy = r.top + (r.bottom - r.top) / 2;
+
+                let position_matched = match (expected_x, expected_y) {
+                    (Some(ex), Some(ey)) => (current_cx - ex).abs() < 20 && (current_cy - ey).abs() < 20,
+                    _ => true,
+                };
+
+                Ok(serde_json::json!({
+                    "is_valid": true,
+                    "control_name": name,
+                    "is_enabled": is_enabled,
+                    "position_matched": position_matched,
+                    "current_center": { "x": current_cx, "y": current_cy },
+                    "bounds": {
+                        "left": r.left,
+                        "top": r.top,
+                        "right": r.right,
+                        "bottom": r.bottom,
+                        "width": r.right - r.left,
+                        "height": r.bottom - r.top,
+                    }
+                }))
+            } else {
+                Ok(serde_json::json!({
+                    "is_valid": true,
+                    "control_name": name,
+                    "is_enabled": is_enabled,
+                    "position_matched": false,
+                    "warning": "Element exists but has no visible bounding rectangle"
+                }))
+            }
+        }
+        Err(e) => Ok(serde_json::json!({
+            "is_valid": false,
+            "error": e,
+            "diagnosis": format!("Element matching '{query}' could not be revalidated; it may have moved or disappeared.")
+        })),
+    }
+}
+
