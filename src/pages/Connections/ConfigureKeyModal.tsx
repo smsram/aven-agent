@@ -40,10 +40,25 @@ export const ConfigureKeyModal: React.FC<ConfigureKeyModalProps> = ({
 
   if (!provider) return null;
 
+  const parsedKeys = apiKey
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
   const handleSave = async () => {
     if (!apiKey.trim() && !hasExistingKey) {
-      setErrorMessage('Please enter an API key');
+      setErrorMessage('Please enter at least one API key');
       return;
+    }
+
+    if (apiKey.trim()) {
+      // Validate no internal spaces inside individual keys
+      for (let i = 0; i < parsedKeys.length; i++) {
+        if (parsedKeys[i].includes(' ')) {
+          setErrorMessage(`API key #${i + 1} contains invalid internal whitespace.`);
+          return;
+        }
+      }
     }
 
     try {
@@ -116,7 +131,7 @@ export const ConfigureKeyModal: React.FC<ConfigureKeyModalProps> = ({
             onClick={handleSave}
             disabled={isSaving || (!apiKey.trim() && !hasExistingKey)}
           >
-            {isSaving ? 'Storing in OS Keyring...' : saveSuccess ? 'Saved!' : 'Save Key'}
+            {isSaving ? 'Storing in OS Keyring...' : saveSuccess ? 'Saved!' : 'Save Key(s)'}
           </Button>
         </>
       }
@@ -137,7 +152,7 @@ export const ConfigureKeyModal: React.FC<ConfigureKeyModalProps> = ({
           <ShieldCheck size={16} color="var(--status-success)" style={{ flexShrink: 0, marginTop: '2px' }} />
           <div style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.45 }}>
             <span style={{ fontWeight: 600, color: 'var(--text-primary)' }}>Secure OS Isolation: </span>
-            Aven never writes credentials to plaintext local storage or configuration files. Secrets are committed to the Windows Credential Manager and only decrypted on demand.
+            Aven never writes credentials to plaintext local storage or configuration files. Secrets are committed to the Windows Credential Manager and only decrypted on demand. Multiple keys are supported separated by commas for automatic rate-limit failover.
           </div>
         </div>
 
@@ -156,19 +171,23 @@ export const ConfigureKeyModal: React.FC<ConfigureKeyModalProps> = ({
             }}
           >
             <Check size={14} />
-            <span>Active API Key detected in Windows Credential Manager</span>
+            <span>Active API Key(s) detected in Windows Credential Manager</span>
           </div>
         )}
 
         {/* Input */}
         <Input
-          label={`${provider.name} API Secret Key`}
+          label={`${provider.name} API Key(s) (comma-separated for auto-failover)`}
           type={showKey ? 'text' : 'password'}
-          placeholder={hasExistingKey ? '••••••••••••••••••••••••••••' : `Enter ${provider.name} API Key`}
+          placeholder={hasExistingKey ? '••••••••••••••••••••••••••••' : `Enter ${provider.name} API Key(s)`}
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
           errorText={errorMessage}
-          helperText={`Available for models like: ${provider.availableModels.slice(0, 3).join(', ')}`}
+          helperText={
+            parsedKeys.length > 1
+              ? `${parsedKeys.length} keys detected for automatic rate-limit failover.`
+              : `Enter multiple keys separated by commas for automatic failover. Available for models like: ${provider.availableModels.slice(0, 3).join(', ')}`
+          }
           suffixAction={
             <button
               type="button"

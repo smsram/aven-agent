@@ -274,8 +274,11 @@ export const IntegrationIcon: React.FC<IntegrationIconProps> = ({
     );
   }
 
-  // 7. Native Windows App Launcher
+  // 7. Native Windows App Launcher & Desktop Control
   if (
+    normId.includes('desktop_control') ||
+    normId.includes('desktop') ||
+    normName.includes('desktop') ||
     normId.includes('launch_app') ||
     normId.includes('app_launcher') ||
     normName.includes('application')

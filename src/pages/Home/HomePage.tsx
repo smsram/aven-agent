@@ -5,6 +5,8 @@ import { QuickActionChips } from './QuickActionChips';
 import { ConversationView } from './ConversationView';
 import { AgentTask, NavigationTab } from '../../types';
 
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
+
 export interface HomePageProps {
   tasks: AgentTask[];
   activeTask?: AgentTask | null;
@@ -33,12 +35,15 @@ export const HomePage: React.FC<HomePageProps> = ({
   // If a conversation is active, transition to properly styled ConversationView
   if (activeTask) {
     return (
-      <ConversationView
-        task={activeTask}
-        onSendMessage={onSendReply}
-        onNewChat={onNewChat}
-        availableModels={availableModels}
-      />
+      <ErrorBoundary sectionName="Conversation">
+        <ConversationView
+          task={activeTask}
+          onSendMessage={onSendReply}
+          onNewChat={onNewChat}
+          availableModels={availableModels}
+          onModelChange={onModelChange}
+        />
+      </ErrorBoundary>
     );
   }
 

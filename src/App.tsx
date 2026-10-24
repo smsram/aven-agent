@@ -9,6 +9,8 @@ import { ActivityPage } from './pages/Activity/ActivityPage';
 import { PluginsPage } from './pages/Plugins/PluginsPage';
 import { SettingsPage } from './pages/Settings/SettingsPage';
 import { CommandPaletteModal } from './components/common/CommandPaletteModal';
+import { ErrorBoundary } from './components/common/ErrorBoundary';
+import { AVAILABLE_MODEL_IDS, DEFAULT_MODEL_ID } from './services/modelRegistry';
 
 const DEFAULT_SETTINGS: AppSettings = {
   general: {
@@ -26,7 +28,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   api: {
     activeProvider: 'cloudflare',
-    activeModel: '@cf/qwen/qwen3.8-27b',
+    activeModel: DEFAULT_MODEL_ID,
     temperature: 0.2,
     maxTokens: 4096,
   },
@@ -44,9 +46,7 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
-const AVAILABLE_MODELS = [
-  '@cf/qwen/qwen3.8-27b',
-];
+const AVAILABLE_MODELS = AVAILABLE_MODEL_IDS;
 
 export function App() {
   const [activeTab, setActiveTab] = useState<NavigationTab>('new-chat');
@@ -192,38 +192,40 @@ export function App() {
 
         {/* Workspace Viewport */}
         <main style={{ flex: 1, height: '100%', overflow: 'hidden', position: 'relative' }}>
-          {activeTab === 'new-chat' ? (
-            <HomePage
-              tasks={tasks}
-              activeTask={activeTask}
-              onSelectTask={handleSelectRecentTask}
-              onSubmitTask={handleCreateTask}
-              onSendReply={handleSendReply}
-              onNewChat={handleNewChat}
-              onNavigateTab={(tab) => {
-                setActiveTab(tab);
-              }}
-              activeModel={settings.api.activeModel}
-              onModelChange={(model) => {
-                const updated = {
-                  ...settings,
-                  api: { ...settings.api, activeModel: model },
-                };
-                setSettings(updated);
-                secureStore.saveSettings(updated);
-              }}
-              availableModels={AVAILABLE_MODELS}
-            />
-          ) : activeTab === 'activity' ? (
-            <ActivityPage
-              tasks={tasks}
-              onClearTasks={() => taskStore.clearAllTasks()}
-              onNavigateNewChat={handleNewChat}
-              onSelectTask={handleSelectRecentTask}
-            />
-          ) : (
-            <PluginsPage />
-          )}
+          <ErrorBoundary sectionName="Workspace Viewport">
+            {activeTab === 'new-chat' ? (
+              <HomePage
+                tasks={tasks}
+                activeTask={activeTask}
+                onSelectTask={handleSelectRecentTask}
+                onSubmitTask={handleCreateTask}
+                onSendReply={handleSendReply}
+                onNewChat={handleNewChat}
+                onNavigateTab={(tab) => {
+                  setActiveTab(tab);
+                }}
+                activeModel={settings.api.activeModel}
+                onModelChange={(model) => {
+                  const updated = {
+                    ...settings,
+                    api: { ...settings.api, activeModel: model },
+                  };
+                  setSettings(updated);
+                  secureStore.saveSettings(updated);
+                }}
+                availableModels={AVAILABLE_MODELS}
+              />
+            ) : activeTab === 'activity' ? (
+              <ActivityPage
+                tasks={tasks}
+                onClearTasks={() => taskStore.clearAllTasks()}
+                onNavigateNewChat={handleNewChat}
+                onSelectTask={handleSelectRecentTask}
+              />
+            ) : (
+              <PluginsPage />
+            )}
+          </ErrorBoundary>
         </main>
       </div>
 

@@ -200,7 +200,7 @@ export const cloudflareService = {
       configured_count: 0,
       pairs: [],
       preferred_index: 0,
-      model_id: '@cf/qwen/qwen3.8-27b',
+      model_id: '@cf/google/gemma-4-26b-a4b-it',
     };
   },
 
@@ -235,6 +235,7 @@ export const cloudflareService = {
     conversationId: string,
     messageId: string,
     messages: ChatMessagePayload[],
+    model?: string,
     maxTokens?: number,
     temperature?: number
   ): Promise<void> {
@@ -243,6 +244,7 @@ export const cloudflareService = {
         conversationId,
         messageId,
         messages,
+        model: model || '@cf/google/gemma-4-26b-a4b-it',
         maxTokens: maxTokens ?? 4096,
         temperature: temperature ?? 0.2,
       });

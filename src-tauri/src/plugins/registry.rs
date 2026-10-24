@@ -50,7 +50,7 @@ pub struct CapabilityExecutionResult {
 
 /// Get native capabilities registered by default
 pub fn get_default_native_capabilities(workspace_path: &str) -> Vec<RegisteredCapability> {
-    vec![
+    let mut caps = vec![
         RegisteredCapability {
             id: "native::open_url".to_string(),
             source_id: "native_browser".to_string(),
@@ -68,24 +68,7 @@ pub fn get_default_native_capabilities(workspace_path: &str) -> Vec<RegisteredCa
             requires_confirmation: false,
             is_available: true,
         },
-        RegisteredCapability {
-            id: "native::launch_app".to_string(),
-            source_id: "native_app_launcher".to_string(),
-            kind: CapabilityKind::Native,
-            name: "Open Windows Application".to_string(),
-            description: "Safely launches approved Windows applications (e.g. notepad, calc, code, terminal, explorer) without shell command strings.".to_string(),
-            input_schema: serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "app_name": { "type": "string", "description": "Application alias (notepad, calc, code, terminal, explorer) or absolute .exe path" },
-                    "args": { "type": "array", "items": { "type": "string" }, "description": "Structured arguments list" }
-                },
-                "required": ["app_name"]
-            }),
-            required_permission: PermissionLevel::Execute,
-            requires_confirmation: true,
-            is_available: cfg!(target_os = "windows"),
-        },
+
         RegisteredCapability {
             id: "native::file_access".to_string(),
             source_id: "native_fs".to_string(),
@@ -118,7 +101,15 @@ pub fn get_default_native_capabilities(workspace_path: &str) -> Vec<RegisteredCa
             requires_confirmation: false,
             is_available: true,
         },
-    ]
+    ];
+
+    #[cfg(target_os = "windows")]
+    {
+        let desktop_caps = crate::plugins::desktop_control::get_desktop_control_capabilities();
+        caps.extend(desktop_caps);
+    }
+
+    caps
 }
 
 #[cfg(test)]
@@ -128,10 +119,16 @@ mod tests {
     #[test]
     fn test_native_capabilities_list() {
         let caps = get_default_native_capabilities("d:\\Projects\\Desktop\\Aven Agent");
-        assert_eq!(caps.len(), 4);
         assert!(caps.iter().any(|c| c.id == "native::open_url"));
-        assert!(caps.iter().any(|c| c.id == "native::launch_app"));
+        assert!(!caps.iter().any(|c| c.id == "native::launch_app"), "native::launch_app duplicate must be removed");
+        assert!(caps.iter().any(|c| c.id == "desktop_control_launch_app"));
         assert!(caps.iter().any(|c| c.id == "native::file_access"));
         assert!(caps.iter().any(|c| c.id == "native::system_info"));
+        assert!(caps.iter().any(|c| c.id == "desktop_control_list_windows"));
+        assert!(caps.iter().any(|c| c.id == "desktop_control_mouse_action"));
+        assert!(caps.iter().any(|c| c.id == "desktop_control_keyboard_action"));
+        assert!(caps.iter().any(|c| c.id == "desktop_control_inspect_ui"));
+        assert!(caps.iter().any(|c| c.id == "desktop_control_capture_screenshot"));
+        assert!(caps.iter().any(|c| c.id == "desktop_control_get_screen_info"));
     }
 }

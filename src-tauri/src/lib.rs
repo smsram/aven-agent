@@ -6,6 +6,8 @@ use std::sync::Arc;
 use tauri::Manager;
 
 pub mod cloudflare;
+pub mod context_manager;
+pub mod credentials;
 pub mod plugins;
 pub mod storage;
 
@@ -19,9 +21,11 @@ pub struct KeyStatus {
 
 #[tauri::command]
 fn set_api_key(provider: String, key: String) -> Result<(), String> {
+    let validated = credentials::parse_and_validate_keys(&key)?;
+    let joined = validated.join(", ");
     let entry = Entry::new(SERVICE_NAME, &format!("api_key_{}", provider))
         .map_err(|e| format!("Failed to create keyring entry: {e}"))?;
-    entry.set_password(&key)
+    entry.set_password(&joined)
         .map_err(|e| format!("Failed to store key in OS credential manager: {e}"))?;
     Ok(())
 }
@@ -142,14 +146,33 @@ pub fn run() {
         .manage(plugins_manager)
         .manage(storage_state)
         .setup(move |app| {
+            // Initialize cursor subsystem lifecycle, inactivity watchdog, and ensure default cursor restoration
+            plugins::desktop_control::cursor::init_lifecycle_and_restore();
+
+            // Guarantee cursor and overlay restoration even in case of unexpected panic
+            let default_panic = std::panic::take_hook();
+            std::panic::set_hook(Box::new(move |info| {
+                plugins::desktop_control::cursor::force_restore_and_cleanup();
+                default_panic(info);
+            }));
+
             let icon_bytes = include_bytes!("../icons/icon.png");
             if let Ok(icon) = tauri::image::Image::from_bytes(icon_bytes) {
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = window.set_icon(icon);
+                    window.on_window_event(move |event| {
+                        match event {
+                            tauri::WindowEvent::Destroyed | tauri::WindowEvent::CloseRequested { .. } => {
+                                plugins::desktop_control::cursor::force_restore_and_cleanup();
+                            }
+                            _ => {}
+                        }
+                    });
                 }
             }
 
             let handle = app.handle().clone();
+            plugins::desktop_control::hotkey::init_global_emergency_hotkey(handle.clone());
             tauri::async_runtime::spawn(async move {
                 pm_clone.load_configs_from_disk(&handle).await;
             });
@@ -188,6 +211,11 @@ pub fn run() {
             storage::save_active_conversation_id,
             storage::clear_all_conversations
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running Aven desktop application");
+        .build(tauri::generate_context!())
+        .expect("error while building Aven desktop application")
+        .run(|_app_handle, event| {
+            if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+                plugins::desktop_control::cursor::force_restore_and_cleanup();
+            }
+        });
 }

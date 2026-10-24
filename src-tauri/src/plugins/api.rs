@@ -159,14 +159,19 @@ pub fn format_grounded_answer(result: &GeminiSearchResult) -> String {
     cleaned
 }
 
-/// Execute a real Google Search grounding request to official Gemini API
+/// Execute a real Google Search grounding request to official Gemini API with multi-key failover
 pub async fn execute_gemini_search(
     client: &reqwest::Client,
-    api_key: &str,
+    api_key_str: &str,
     query: &str,
 ) -> Result<GeminiSearchResult, String> {
-    let trimmed_key = api_key.trim();
-    if trimmed_key.is_empty() {
+    let keys: Vec<&str> = api_key_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if keys.is_empty() {
         return Err("Gemini API key is required. Please configure your key in Plugins → Google Search.".into());
     }
 
@@ -176,47 +181,73 @@ pub async fn execute_gemini_search(
     }
 
     let payload = build_gemini_search_payload(trimmed_query);
+    let mut last_err = String::new();
 
-    let response = client
-        .post(GEMINI_ENDPOINT)
-        .header("x-goog-api-key", trimmed_key)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| format!("Failed to connect to Gemini API: {e}"))?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let code = status.as_u16();
-        let err_text = response.text().await.unwrap_or_default();
-
-        let readable_msg = match code {
-            400 => format!("HTTP 400 Bad Request: Check query format. ({err_text})"),
-            401 | 403 => "HTTP 401/403 Unauthorized: Invalid Gemini API Key or missing permissions. Please verify your key in Google AI Studio.".to_string(),
-            429 => "HTTP 429 Rate Limit Exceeded: Google Gemini quota limit reached. Please wait or check billing.".to_string(),
-            _ if code >= 500 => format!("Google Gemini server error (HTTP {code}). Please retry later."),
-            _ => format!("Gemini API returned error HTTP {code}: {err_text}"),
+    for (idx, key) in keys.iter().enumerate() {
+        let masked = if key.len() > 8 {
+            format!("{}...{}", &key[..4], &key[key.len() - 4..])
+        } else {
+            "****".to_string()
         };
 
-        return Err(readable_msg);
+        let response_res = client
+            .post(GEMINI_ENDPOINT)
+            .header("x-goog-api-key", *key)
+            .header("Content-Type", "application/json")
+            .json(&payload)
+            .send()
+            .await;
+
+        let response = match response_res {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = format!("Key #{idx} ({masked}): Connection error: {e}");
+                continue;
+            }
+        };
+
+        let status = response.status();
+        if status.is_success() {
+            let json_val: serde_json::Value = response
+                .json()
+                .await
+                .map_err(|e| format!("Failed to parse Gemini response JSON: {e}"))?;
+
+            return parse_gemini_search_response(trimmed_query, &json_val);
+        } else {
+            let code = status.as_u16();
+            let err_text = response.text().await.unwrap_or_default();
+            last_err = match code {
+                400 => format!("HTTP 400 Bad Request: Check query format. ({err_text})"),
+                401 | 403 => format!("Key #{idx} ({masked}): HTTP 401/403 Unauthorized (Invalid API Key or missing permissions)."),
+                429 => format!("Key #{idx} ({masked}): HTTP 429 Rate limit or quota exhausted."),
+                _ if code >= 500 => format!("Key #{idx} ({masked}): Google Gemini server error (HTTP {code})."),
+                _ => format!("Key #{idx} ({masked}): HTTP {code} error: {err_text}"),
+            };
+
+            // Permanent client error (bad request) should not rotate
+            if code == 400 {
+                return Err(last_err);
+            }
+            continue;
+        }
     }
 
-    let json_val: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse Gemini response JSON: {e}"))?;
-
-    parse_gemini_search_response(trimmed_query, &json_val)
+    Err(format!("All configured Gemini API keys failed. Last error: {last_err}"))
 }
 
-/// Test connection to Google Gemini API using provided API Key
+/// Test connection to Google Gemini API using provided API Key(s)
 pub async fn test_gemini_connection(
     client: &reqwest::Client,
-    api_key: &str,
+    api_key_str: &str,
 ) -> Result<ApiTestResult, String> {
-    let trimmed_key = api_key.trim();
-    if trimmed_key.is_empty() {
+    let keys: Vec<&str> = api_key_str
+        .split(',')
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if keys.is_empty() {
         return Ok(ApiTestResult {
             success: false,
             latency_ms: 0,
@@ -224,52 +255,59 @@ pub async fn test_gemini_connection(
         });
     }
 
-    let start = Instant::now();
-    // Test with a lightweight verification ping
     let ping_payload = serde_json::json!({
         "contents": [
             { "parts": [{ "text": "ping" }] }
         ]
     });
 
-    let resp = client
-        .post(GEMINI_ENDPOINT)
-        .header("x-goog-api-key", trimmed_key)
-        .header("Content-Type", "application/json")
-        .json(&ping_payload)
-        .send()
-        .await;
+    let mut any_succeeded = false;
+    let mut total_latency = 0u64;
+    let mut messages = Vec::new();
 
-    let latency = start.elapsed().as_millis() as u64;
+    for (idx, key) in keys.iter().enumerate() {
+        let start = Instant::now();
+        let resp = client
+            .post(GEMINI_ENDPOINT)
+            .header("x-goog-api-key", *key)
+            .header("Content-Type", "application/json")
+            .json(&ping_payload)
+            .send()
+            .await;
 
-    match resp {
-        Ok(r) => {
-            let status = r.status();
-            if status.is_success() {
-                Ok(ApiTestResult {
-                    success: true,
-                    latency_ms: latency,
-                    message: format!("Connected successfully to Gemini 2.5 Flash Search Grounding ({latency}ms)"),
-                })
-            } else {
-                let code = status.as_u16();
-                let msg = match code {
-                    401 | 403 => "Invalid Gemini API Key (HTTP 401/403 Unauthorized). Verify your key from Google AI Studio.".into(),
-                    429 => "Rate limit exceeded (HTTP 429). Check your quota.".into(),
-                    _ => format!("Gemini returned HTTP {code} error during handshake."),
-                };
-                Ok(ApiTestResult {
-                    success: false,
-                    latency_ms: latency,
-                    message: msg,
-                })
+        let latency = start.elapsed().as_millis() as u64;
+
+        match resp {
+            Ok(r) if r.status().is_success() => {
+                any_succeeded = true;
+                total_latency = latency;
+                messages.push(format!("Key #{} connected ({latency}ms)", idx + 1));
+            }
+            Ok(r) => {
+                let code = r.status().as_u16();
+                messages.push(format!("Key #{} failed (HTTP {code})", idx + 1));
+            }
+            Err(e) => {
+                messages.push(format!("Key #{} network error: {e}", idx + 1));
             }
         }
-        Err(e) => Ok(ApiTestResult {
+    }
+
+    if any_succeeded {
+        Ok(ApiTestResult {
+            success: true,
+            latency_ms: total_latency,
+            message: format!(
+                "Connected successfully to Gemini 2.5 Flash. Status: {}",
+                messages.join(", ")
+            ),
+        })
+    } else {
+        Ok(ApiTestResult {
             success: false,
-            latency_ms: latency,
-            message: format!("Network connection failed: {e}"),
-        }),
+            latency_ms: 0,
+            message: format!("All keys failed: {}", messages.join("; ")),
+        })
     }
 }
 

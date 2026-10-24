@@ -28,6 +28,11 @@ import {
   CredentialsStatus,
   OverallTestResult,
 } from '../../services/tauriIpc';
+import {
+  SUPPORTED_MODELS,
+  getModelDisplayName,
+  DEFAULT_MODEL_ID,
+} from '../../services/modelRegistry';
 
 export interface SettingsPageProps {
   isOpen: boolean;
@@ -160,7 +165,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         configured_count: 0,
         pairs: [],
         preferred_index: 0,
-        model_id: '@cf/qwen/qwen3.8-27b',
+        model_id: DEFAULT_MODEL_ID,
       });
       setAccountIdsInput('');
       setApiKeysInput('');
@@ -572,7 +577,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
               )}
 
-              {/* 3. API (Cloudflare Workers AI Exclusive Configuration) */}
+              {/* 3. API (Cloudflare Workers AI Configuration) */}
               {activeSection === 'api' && (
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '3px' }}>
@@ -587,10 +592,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         backgroundColor: 'var(--accent-subtle)',
                         border: '1px solid var(--accent-border)',
                         color: 'var(--accent-primary)',
-                        fontFamily: 'var(--font-mono)',
+                        fontWeight: 500,
                       }}
                     >
-                      @cf/qwen/qwen3.8-27b
+                      {getModelDisplayName(form.api.activeModel || DEFAULT_MODEL_ID)}
                     </span>
                   </div>
                   <p style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '16px' }}>
@@ -598,7 +603,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                   </p>
 
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-                    {/* Model Details Card */}
+                    {/* Model Selector Card */}
                     <div
                       style={{
                         padding: '12px 14px',
@@ -607,28 +612,81 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         border: '1px solid var(--border-subtle)',
                         display: 'flex',
                         flexDirection: 'column',
-                        gap: '6px',
+                        gap: '10px',
                       }}
                     >
                       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
                         <span style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-                          Model Information
+                          Default Active Model
                         </span>
                         <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-                          Cloudflare Workers AI Exclusive
+                          Workers AI Models
                         </span>
                       </div>
-                      <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+
+                      {/* Model Cards Grid */}
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: '8px' }}>
+                        {SUPPORTED_MODELS.map((model) => {
+                          const isSelected = (form.api.activeModel || DEFAULT_MODEL_ID) === model.id;
+                          return (
+                            <button
+                              key={model.id}
+                              type="button"
+                              onClick={() =>
+                                setForm({
+                                  ...form,
+                                  api: {
+                                    ...form.api,
+                                    activeModel: model.id,
+                                  },
+                                })
+                              }
+                              style={{
+                                padding: '10px 12px',
+                                borderRadius: 'var(--radius-md)',
+                                backgroundColor: isSelected ? 'var(--accent-subtle)' : 'var(--bg-input)',
+                                border: `1px solid ${isSelected ? 'var(--accent-primary)' : 'var(--border-subtle)'}`,
+                                display: 'flex',
+                                flexDirection: 'column',
+                                alignItems: 'flex-start',
+                                gap: '4px',
+                                cursor: 'pointer',
+                                textAlign: 'left',
+                                transition: 'all var(--transition-fast)',
+                              }}
+                            >
+                              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
+                                <span style={{ fontSize: '12px', fontWeight: 600, color: isSelected ? 'var(--text-accent)' : 'var(--text-primary)' }}>
+                                  {model.name}
+                                </span>
+                                {isSelected && <Check size={13} color="var(--accent-primary)" />}
+                              </div>
+                              <span style={{ fontSize: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+                                {model.id}
+                              </span>
+                              <div style={{ display: 'flex', gap: '6px', marginTop: '2px' }}>
+                                <span
+                                  style={{
+                                    fontSize: '9.5px',
+                                    padding: '1px 5px',
+                                    borderRadius: '3px',
+                                    backgroundColor: 'rgba(255,255,255,0.06)',
+                                    color: 'var(--text-secondary)',
+                                  }}
+                                >
+                                  {model.contextLimit}
+                                </span>
+                              </div>
+                            </button>
+                          );
+                        })}
+                      </div>
+
+                      <div style={{ fontSize: '11.5px', color: 'var(--text-secondary)', lineHeight: 1.5, borderTop: '1px solid var(--border-subtle-dim)', paddingTop: '8px', marginTop: '2px' }}>
                         <p style={{ margin: '0 0 4px 0' }}>
-                          <strong style={{ color: 'var(--text-primary)' }}>Model ID:</strong>{' '}
-                          <code style={{ fontFamily: 'var(--font-mono)', color: 'var(--accent-primary)', backgroundColor: 'var(--bg-input)', padding: '1px 5px', borderRadius: '3px' }}>
-                            @cf/qwen/qwen3.8-27b
-                          </code>
-                        </p>
-                        <p style={{ margin: '0 0 4px 0' }}>
-                          <strong style={{ color: 'var(--text-primary)' }}>Endpoint:</strong>{' '}
+                          <strong style={{ color: 'var(--text-primary)' }}>Target Endpoint:</strong>{' '}
                           <code style={{ fontFamily: 'var(--font-mono)', fontSize: '11px', color: 'var(--text-muted)' }}>
-                            https://api.cloudflare.com/client/v4/accounts/&#123;ACCOUNT_ID&#125;/ai/run/@cf/qwen/qwen3.8-27b
+                            https://api.cloudflare.com/client/v4/accounts/&#123;ACCOUNT_ID&#125;/ai/run/{form.api.activeModel || DEFAULT_MODEL_ID}
                           </code>
                         </p>
                         <p style={{ margin: 0, color: 'var(--text-muted)' }}>

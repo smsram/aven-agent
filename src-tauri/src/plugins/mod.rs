@@ -1,4 +1,5 @@
 pub mod api;
+pub mod desktop_control;
 pub mod mcp;
 pub mod native;
 pub mod registry;
@@ -390,12 +391,83 @@ impl PluginsManager {
                 }),
             }
         }
-        // 2. Native Capabilities
+        // 2. Desktop Control Capabilities
+        else if cap_id.starts_with("desktop_control_")
+            || cap_id.starts_with("desktop_control::")
+            || cap_id.starts_with("native_desktop_control_")
+            || cap_id.starts_with("native::desktop_control::")
+        {
+            let default_dir = std::path::Path::new(&self.default_workspace);
+            match desktop_control::execute_desktop_control_capability(
+                &cap_id,
+                &request.arguments,
+                request.user_confirmed,
+                default_dir,
+            ) {
+                Ok(val) => Ok(registry::CapabilityExecutionResult {
+                    success: true,
+                    capability_id: cap_id,
+                    result: Some(val),
+                    error: None,
+                }),
+                Err(e) => Ok(registry::CapabilityExecutionResult {
+                    success: false,
+                    capability_id: cap_id,
+                    result: None,
+                    error: Some(e),
+                }),
+            }
+        }
+        // 3. Other Native Capabilities
         else if let Some(native_action) = cap_id
             .strip_prefix("native::")
             .or_else(|| cap_id.strip_prefix("native_"))
         {
             match native_action {
+                "desktop_control" => {
+                    let default_dir = std::path::Path::new(&self.default_workspace);
+                    let action = request
+                        .arguments
+                        .get("action")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("self_test");
+                    if action == "self_test" {
+                        match desktop_control::run_desktop_control_self_test() {
+                            Ok(res) => Ok(registry::CapabilityExecutionResult {
+                                success: true,
+                                capability_id: cap_id,
+                                result: Some(res),
+                                error: None,
+                            }),
+                            Err(e) => Ok(registry::CapabilityExecutionResult {
+                                success: false,
+                                capability_id: cap_id,
+                                result: None,
+                                error: Some(e),
+                            }),
+                        }
+                    } else {
+                        match desktop_control::execute_desktop_control_capability(
+                            action,
+                            &request.arguments,
+                            request.user_confirmed,
+                            default_dir,
+                        ) {
+                            Ok(res) => Ok(registry::CapabilityExecutionResult {
+                                success: true,
+                                capability_id: cap_id,
+                                result: Some(res),
+                                error: None,
+                            }),
+                            Err(e) => Ok(registry::CapabilityExecutionResult {
+                                success: false,
+                                capability_id: cap_id,
+                                result: None,
+                                error: Some(e),
+                            }),
+                        }
+                    }
+                }
                 "open_url" | "browser" => {
                     let url = request
                         .arguments
@@ -422,6 +494,7 @@ impl PluginsManager {
                     let app_name = request
                         .arguments
                         .get("app_name")
+                        .or_else(|| request.arguments.get("application"))
                         .and_then(|v| v.as_str())
                         .ok_or_else(|| "Missing required parameter 'app_name'".to_string())?;
 
@@ -436,11 +509,22 @@ impl PluginsManager {
                         })
                         .unwrap_or_default();
 
-                    match native::launch_application(app_name, &args, request.user_confirmed) {
-                        Ok(msg) => Ok(registry::CapabilityExecutionResult {
-                            success: true,
+                    let reuse = request
+                        .arguments
+                        .get("reuse_existing")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true);
+
+                    match desktop_control::launcher::launch_or_reuse_application(
+                        app_name,
+                        &args,
+                        reuse,
+                        request.user_confirmed,
+                    ) {
+                        Ok(res) => Ok(registry::CapabilityExecutionResult {
+                            success: res.success,
                             capability_id: cap_id,
-                            result: Some(serde_json::json!({ "message": msg })),
+                            result: Some(serde_json::to_value(&res).unwrap_or_default()),
                             error: None,
                         }),
                         Err(e) => Ok(registry::CapabilityExecutionResult {
@@ -587,27 +671,7 @@ pub fn get_default_configs(workspace_path: &str) -> HashMap<String, PluginConfig
         },
     );
 
-    map.insert(
-        "native_app_launcher".to_string(),
-        PluginConfig {
-            id: "native_app_launcher".to_string(),
-            kind: PluginKind::Native,
-            name: "Open Windows Applications".to_string(),
-            enabled: true,
-            transport: None,
-            command: None,
-            args: None,
-            url: None,
-            approved_paths: None,
-            settings: HashMap::new(),
-            last_status: if cfg!(target_os = "windows") {
-                PluginStatus::Connected
-            } else {
-                PluginStatus::Unsupported
-            },
-            last_error: None,
-        },
-    );
+
 
     map.insert(
         "native_fs".to_string(),
@@ -643,6 +707,28 @@ pub fn get_default_configs(workspace_path: &str) -> HashMap<String, PluginConfig
             args: None,
             url: None,
             approved_paths: None,
+            settings: HashMap::new(),
+            last_status: if cfg!(target_os = "windows") {
+                PluginStatus::Connected
+            } else {
+                PluginStatus::Unsupported
+            },
+            last_error: None,
+        },
+    );
+
+    map.insert(
+        "native_desktop_control".to_string(),
+        PluginConfig {
+            id: "native_desktop_control".to_string(),
+            kind: PluginKind::Native,
+            name: "Desktop & UI Control".to_string(),
+            enabled: true,
+            transport: None,
+            command: None,
+            args: None,
+            url: None,
+            approved_paths: Some(vec![workspace_path.to_string()]),
             settings: HashMap::new(),
             last_status: if cfg!(target_os = "windows") {
                 PluginStatus::Connected
@@ -904,23 +990,7 @@ pub fn get_full_catalog() -> Vec<CatalogEntry> {
             default_url: None,
             permissions_notice: "Only http:// and https:// URLs are permitted. file://, javascript:, and shell protocols are blocked.".to_string(),
         },
-        CatalogEntry {
-            id: "native_app_launcher".to_string(),
-            kind: PluginKind::Native,
-            name: "Open Windows Applications".to_string(),
-            category: "System".to_string(),
-            description: "Safely launches approved Windows applications (e.g. Notepad, Calculator, VS Code, Windows Terminal, File Explorer) without arbitrary shell command strings.".to_string(),
-            supported_capabilities: vec![
-                "native::launch_app".to_string(),
-            ],
-            requirements: "Windows operating system.".to_string(),
-            setup_instructions: "Supports recognized Windows tools or explicit .exe paths. Shell command interpreters (cmd.exe, powershell.exe) are strictly blocked.".to_string(),
-            is_implemented: true,
-            default_command: None,
-            default_args: None,
-            default_url: None,
-            permissions_notice: "Dangerous script interpreters are blocked. Explicit confirmation is required for sensitive applications.".to_string(),
-        },
+
         CatalogEntry {
             id: "native_fs".to_string(),
             kind: PluginKind::Native,
@@ -954,6 +1024,31 @@ pub fn get_full_catalog() -> Vec<CatalogEntry> {
             default_args: None,
             default_url: None,
             permissions_notice: "Read-only non-sensitive telemetry.".to_string(),
+        },
+        CatalogEntry {
+            id: "native_desktop_control".to_string(),
+            kind: PluginKind::Native,
+            name: "Desktop & UI Control".to_string(),
+            category: "System".to_string(),
+            description: "Direct Windows UI Automation and native desktop control for windows, mouse, keyboard (Unicode text and shortcuts), UI element inspection, screenshots, bounded waits, and application launching with window reuse.".to_string(),
+            supported_capabilities: vec![
+                "desktop_control_list_windows".to_string(),
+                "desktop_control_get_window_details".to_string(),
+                "desktop_control_window_action".to_string(),
+                "desktop_control_mouse_action".to_string(),
+                "desktop_control_keyboard_action".to_string(),
+                "desktop_control_inspect_ui".to_string(),
+                "desktop_control_capture_screenshot".to_string(),
+                "desktop_control_wait_for_ui".to_string(),
+                "desktop_control_launch_app".to_string(),
+            ],
+            requirements: "Windows 10/11 operating system. Native UI Automation.".to_string(),
+            setup_instructions: "Enabled and active by default on Windows. Sensitive destructive actions (like closing applications) require explicit confirmation.".to_string(),
+            is_implemented: true,
+            default_command: None,
+            default_args: None,
+            default_url: None,
+            permissions_notice: "Operates with standard desktop user permissions. Shell scripts (cmd/powershell) are strictly blocked. Actions are verified and bounded.".to_string(),
         },
     ]
 }
@@ -1022,6 +1117,10 @@ pub async fn delete_plugin_config(
         }
     }
 
+    if plugin_id == "native_desktop_control" {
+        desktop_control::cursor::force_restore_and_cleanup();
+    }
+
     // 2. Remove configuration
     {
         let mut configs = state.configs.lock().await;
@@ -1044,7 +1143,44 @@ pub async fn test_plugin_connection(
 ) -> Result<TestConnectionResult, String> {
     let start = Instant::now();
 
-    // Check if it's Native
+    // Check if it's Native Desktop Control
+    if plugin_id == "native_desktop_control" {
+        let is_win = cfg!(target_os = "windows");
+        if !is_win {
+            return Ok(TestConnectionResult {
+                success: false,
+                status: PluginStatus::Unsupported,
+                latency_ms: 1,
+                message: "Desktop Control requires Windows OS.".to_string(),
+            });
+        }
+        let test_res = desktop_control::run_desktop_control_self_test();
+        let latency = start.elapsed().as_millis() as u64;
+        return match test_res {
+            Ok(info) => {
+                let uia = info.get("ui_automation_active").and_then(|v| v.as_bool()).unwrap_or(false);
+                let visible = info.get("visible_windows_count").and_then(|v| v.as_u64()).unwrap_or(0);
+                Ok(TestConnectionResult {
+                    success: true,
+                    status: PluginStatus::Connected,
+                    latency_ms: latency,
+                    message: format!(
+                        "Desktop Control self-test passed: UI Automation is {}, {} visible window(s) detected.",
+                        if uia { "active" } else { "standby" },
+                        visible
+                    ),
+                })
+            }
+            Err(e) => Ok(TestConnectionResult {
+                success: false,
+                status: PluginStatus::Error,
+                latency_ms: latency,
+                message: format!("Desktop Control self-test failed: {e}"),
+            }),
+        };
+    }
+
+    // Check if it's other Native capabilities
     if plugin_id.starts_with("native_") {
         let is_win = cfg!(target_os = "windows");
         return Ok(TestConnectionResult {
@@ -1258,6 +1394,10 @@ pub async fn disconnect_plugin(
         }
     }
 
+    if plugin_id == "native_desktop_control" {
+        desktop_control::cursor::force_restore_and_cleanup();
+    }
+
     // 2. Update config status
     let mut config = {
         let configs = state.configs.lock().await;
@@ -1316,9 +1456,10 @@ mod tests {
         assert!(cat.iter().any(|c| c.id == "api_gemini_search"));
         assert!(cat.iter().any(|c| c.id == "api_custom_rest"));
         assert!(cat.iter().any(|c| c.id == "native_browser"));
-        assert!(cat.iter().any(|c| c.id == "native_app_launcher"));
+        assert!(!cat.iter().any(|c| c.id == "native_app_launcher"), "native_app_launcher must be removed in favor of native_desktop_control");
         assert!(cat.iter().any(|c| c.id == "native_fs"));
         assert!(cat.iter().any(|c| c.id == "native_system"));
+        assert!(cat.iter().any(|c| c.id == "native_desktop_control"));
     }
 
     #[test]
@@ -1326,6 +1467,9 @@ mod tests {
         let cat = get_full_catalog();
         let fs = cat.iter().find(|c| c.id == "mcp_filesystem").unwrap();
         assert!(fs.is_implemented);
+
+        let dt = cat.iter().find(|c| c.id == "native_desktop_control").unwrap();
+        assert!(dt.is_implemented);
 
         let c7 = cat.iter().find(|c| c.id == "mcp_context7").unwrap();
         assert!(!c7.is_implemented);
@@ -1341,9 +1485,10 @@ mod tests {
     fn test_default_configs_contain_native_and_gemini_search() {
         let defaults = get_default_configs("d:\\Projects\\Desktop\\Aven Agent");
         assert!(defaults.contains_key("native_browser"));
-        assert!(defaults.contains_key("native_app_launcher"));
+        assert!(!defaults.contains_key("native_app_launcher"), "native_app_launcher must not be in default configs");
         assert!(defaults.contains_key("native_fs"));
         assert!(defaults.contains_key("native_system"));
+        assert!(defaults.contains_key("native_desktop_control"));
         assert!(defaults.contains_key("api_gemini_search"));
 
         let gemini = defaults.get("api_gemini_search").unwrap();

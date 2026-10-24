@@ -134,6 +134,35 @@ class TaskStore {
       await listen<ChatActivityStatusPayload>('chat-activity-status', (event) => {
         this.handleActivityStatus(event.payload);
       });
+
+      await listen<{ shortcut: string; timestamp: number }>('agent-emergency-stopped', (event) => {
+        console.warn('Emergency global stop received from OS hotkey:', event.payload);
+        if (this.activeTaskId) {
+          this.stopGenerating(this.activeTaskId);
+        } else {
+          for (const t of this.tasks) {
+            if (t.status === 'running') {
+              this.stopGenerating(t.id);
+            }
+          }
+        }
+      });
+
+      if (typeof window !== 'undefined') {
+        window.addEventListener('keydown', (e) => {
+          if (e.ctrlKey && e.shiftKey && e.key === 'Backspace') {
+            if (this.activeTaskId) {
+              this.stopGenerating(this.activeTaskId);
+            } else {
+              for (const t of this.tasks) {
+                if (t.status === 'running') {
+                  this.stopGenerating(t.id);
+                }
+              }
+            }
+          }
+        });
+      }
     } catch (err) {
       console.error('Failed to register Tauri chat stream listeners:', err);
     }
@@ -254,7 +283,7 @@ class TaskStore {
       { role: 'user', content: prompt },
     ];
 
-    cloudflareService.startChatStream(id, asstMsgId, messagesPayload).catch((err) => {
+    cloudflareService.startChatStream(id, asstMsgId, messagesPayload, model).catch((err) => {
       this.handleStreamDone({
         conversation_id: id,
         message_id: asstMsgId,
@@ -337,7 +366,7 @@ class TaskStore {
       this.persistTask(updatedTask);
     }
 
-    cloudflareService.startChatStream(taskId, asstMsgId, historyPayload).catch((err) => {
+    cloudflareService.startChatStream(taskId, asstMsgId, historyPayload, model).catch((err) => {
       this.handleStreamDone({
         conversation_id: taskId,
         message_id: asstMsgId,
@@ -406,7 +435,8 @@ class TaskStore {
       this.persistTask(updatedTask);
     }
 
-    cloudflareService.startChatStream(taskId, assistantMsgId, historyPayload).catch((err) => {
+    const targetModel = task.model || '@cf/google/gemma-4-26b-a4b-it';
+    cloudflareService.startChatStream(taskId, assistantMsgId, historyPayload, targetModel).catch((err) => {
       this.handleStreamDone({
         conversation_id: taskId,
         message_id: assistantMsgId,
@@ -483,6 +513,10 @@ class TaskStore {
   }
 
   handleStreamChunk(payload: StreamChunkPayload): void {
+    if (!payload || !payload.conversation_id || !payload.message_id) return;
+    const chunkText = payload.chunk || '';
+    if (!chunkText) return;
+
     let targetTask: AgentTask | null = null;
 
     this.tasks = this.tasks.map((t) => {
@@ -491,7 +525,7 @@ class TaskStore {
           if (m.id === payload.message_id) {
             return {
               ...m,
-              text: m.text + payload.chunk,
+              text: (m.text || '') + chunkText,
               status: 'thinking' as const,
             };
           }
@@ -516,6 +550,7 @@ class TaskStore {
   }
 
   handleActivityStatus(payload: ChatActivityStatusPayload): void {
+    if (!payload || !payload.conversation_id || !payload.message_id) return;
     let targetTask: AgentTask | null = null;
 
     this.tasks = this.tasks.map((t) => {
@@ -607,6 +642,7 @@ class TaskStore {
   }
 
   handleStreamDone(payload: StreamDonePayload): void {
+    if (!payload || !payload.conversation_id || !payload.message_id) return;
     const isError = Boolean(payload.error);
     const nowTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     this.cancelDebouncedSave(payload.conversation_id);

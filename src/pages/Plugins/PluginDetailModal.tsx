@@ -645,6 +645,59 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
                 </div>
               )}
 
+              {/* Native Desktop Control Permission Settings */}
+              {id === 'native_desktop_control' && (
+                <div style={{ marginBottom: '16px' }}>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+                    <div style={{ padding: '10px 12px', backgroundColor: '#17181D', borderRadius: '6px', border: '1px solid #2D2E36' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 500, color: '#E4E4E7' }}>Destructive Action Confirmation</span>
+                        <span style={{ fontSize: '10.5px', color: '#34D399', backgroundColor: 'rgba(52,211,153,0.1)', padding: '2px 6px', borderRadius: '4px' }}>Enforced in Rust</span>
+                      </div>
+                      <p style={{ fontSize: '11px', color: '#A5A6B0', margin: 0, lineHeight: 1.4 }}>
+                        Actions that close applications or terminate windows strictly require user confirmation before execution.
+                      </p>
+                    </div>
+
+                    <div style={{ padding: '10px 12px', backgroundColor: '#17181D', borderRadius: '6px', border: '1px solid #2D2E36' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                        <span style={{ fontSize: '12px', fontWeight: 500, color: '#E4E4E7' }}>Input Security & Shell Isolation</span>
+                        <span style={{ fontSize: '10.5px', color: '#34D399', backgroundColor: 'rgba(52,211,153,0.1)', padding: '2px 6px', borderRadius: '4px' }}>Protected</span>
+                      </div>
+                      <p style={{ fontSize: '11px', color: '#A5A6B0', margin: 0, lineHeight: 1.4 }}>
+                        Shell interpreters (cmd.exe, powershell.exe) are blocked. Keyboard input is sent cleanly with automatic modifier key cleanup.
+                      </p>
+                    </div>
+
+                    <div style={{ marginTop: '4px' }}>
+                      <label style={{ display: 'block', fontSize: '11px', color: '#A5A6B0', marginBottom: '4px' }}>
+                        Approved Screenshot & Asset Directory Scope
+                      </label>
+                      <input
+                        type="text"
+                        value={approvedPaths}
+                        onChange={(e) => setApprovedPaths(e.target.value)}
+                        placeholder="d:\Projects\Desktop\Aven Agent"
+                        style={{
+                          width: '100%',
+                          padding: '7px 10px',
+                          backgroundColor: '#17181D',
+                          border: '1px solid #34353C',
+                          borderRadius: '5px',
+                          color: '#F4F4F5',
+                          fontSize: '12px',
+                          fontFamily: 'var(--font-mono)',
+                          outline: 'none',
+                        }}
+                      />
+                      <span style={{ fontSize: '10.5px', color: '#71717A', marginTop: '3px', display: 'block' }}>
+                        Screenshots captured by the agent will be stored strictly within this directory scope.
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Secret Key / API Key for API integration or GitHub MCP */}
               {(id === 'api_gemini_search' || id === 'mcp_github' || id === 'mcp_custom') && (
                 <div style={{ marginBottom: '12px' }}>
@@ -802,7 +855,7 @@ export const PluginDetailModal: React.FC<PluginDetailModalProps> = ({
                   }}
                 >
                   <Activity size={13} className={isTesting ? 'animate-spin' : ''} />
-                  <span>{isTesting ? 'Testing...' : 'Test Connection'}</span>
+                  <span>{isTesting ? 'Testing...' : (id === 'native_desktop_control' ? 'Run Self-Test' : 'Test Connection')}</span>
                 </button>
 
                 {currentStatus === 'connected' ? (

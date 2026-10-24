@@ -17,13 +17,19 @@ import { AgentTask, ProcessStep, MessageMetadata } from '../../types';
 import { Button } from '../../components/common/Button';
 import { MarkdownMessage } from '../../components/chat/MarkdownMessage';
 import { IntegrationIcon } from '../../components/icons/IntegrationIcon';
+import { ErrorBoundary } from '../../components/common/ErrorBoundary';
 import { taskStore } from '../../services/taskStore';
+import {
+  getModelDisplayName,
+  DEFAULT_MODEL_ID,
+} from '../../services/modelRegistry';
 
 export interface ConversationViewProps {
   task: AgentTask;
   onSendMessage: (text: string, model: string) => void;
   onNewChat: () => void;
   availableModels: string[];
+  onModelChange?: (model: string) => void;
 }
 
 /**
@@ -396,7 +402,7 @@ const MessageMetadataPopover: React.FC<{
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isOpen]);
 
-  const model = metadata?.model || fallbackModel || '@cf/qwen/qwen3.8-27b';
+  const model = metadata?.model || fallbackModel || DEFAULT_MODEL_ID;
   const duration = metadata?.duration_formatted || (metadata?.duration_ms ? `${(metadata.duration_ms / 1000).toFixed(1)}s` : undefined);
   const promptTokens = metadata?.prompt_tokens;
   const completionTokens = metadata?.completion_tokens;
@@ -457,7 +463,9 @@ const MessageMetadataPopover: React.FC<{
 
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: 'var(--text-muted)' }}>Model</span>
-            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }}>{model}</span>
+            <span style={{ fontFamily: 'var(--font-mono)', color: 'var(--text-primary)' }} title={model}>
+              {getModelDisplayName(model)}
+            </span>
           </div>
 
           {duration && (
@@ -504,11 +512,18 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
   onSendMessage,
   onNewChat,
   availableModels,
+  onModelChange,
 }) => {
   const [replyText, setReplyText] = useState('');
-  const [selectedModel, setSelectedModel] = useState(task.model || '@cf/qwen/qwen3.8-27b');
+  const [selectedModel, setSelectedModel] = useState(task.model || DEFAULT_MODEL_ID);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
   const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (task.model) {
+      setSelectedModel(task.model);
+    }
+  }, [task.id, task.model]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const isUserScrolledUp = useRef(false);
@@ -689,10 +704,19 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                 {/* Markdown Formatted Content rendered directly on chat background */}
                 {msg.text && (
                   <div style={{ width: '100%', minWidth: 0 }}>
-                    <MarkdownMessage
-                      content={msg.text}
-                      isStreaming={isMsgThinking}
-                    />
+                    <ErrorBoundary
+                      sectionName="Message formatting"
+                      fallback={
+                        <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', color: 'var(--text-primary)', fontSize: '13px', lineHeight: 1.5 }}>
+                          {msg.text}
+                        </div>
+                      }
+                    >
+                      <MarkdownMessage
+                        content={msg.text}
+                        isStreaming={isMsgThinking}
+                      />
+                    </ErrorBoundary>
                   </div>
                 )}
 
@@ -890,10 +914,11 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                     color: 'var(--text-secondary)',
                     cursor: 'pointer',
                   }}
+                  title={selectedModel}
                 >
                   <Sparkles size={11} color="var(--accent-primary)" />
-                  <span style={{ fontWeight: 500, color: 'var(--text-primary)', fontFamily: 'var(--font-mono)' }}>
-                    {selectedModel}
+                  <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>
+                    {getModelDisplayName(selectedModel)}
                   </span>
                   <ChevronDown size={11} color="var(--text-muted)" />
                 </button>
@@ -904,7 +929,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       position: 'absolute',
                       bottom: '28px',
                       left: 0,
-                      width: '240px',
+                      width: '280px',
                       backgroundColor: 'var(--bg-dropdown)',
                       border: '1px solid var(--border-subtle)',
                       borderRadius: 'var(--radius-md)',
@@ -915,6 +940,7 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                   >
                     {availableModels.map((m) => {
                       const isSelected = m === selectedModel;
+                      const displayName = getModelDisplayName(m);
                       return (
                         <button
                           key={m}
@@ -922,24 +948,39 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                           onClick={() => {
                             setSelectedModel(m);
                             setShowModelDropdown(false);
+                            onModelChange?.(m);
                           }}
                           style={{
                             width: '100%',
-                            padding: '5px 8px',
+                            padding: '6px 8px',
                             borderRadius: 'var(--radius-sm)',
                             backgroundColor: isSelected ? 'var(--accent-subtle)' : 'transparent',
-                            color: isSelected ? 'var(--text-accent)' : 'var(--text-secondary)',
+                            color: isSelected ? 'var(--text-accent)' : 'var(--text-primary)',
                             fontSize: '11px',
-                            fontFamily: 'var(--font-mono)',
                             display: 'flex',
                             alignItems: 'center',
                             justifyContent: 'space-between',
                             cursor: 'pointer',
                             textAlign: 'left',
+                            gap: '8px',
                           }}
                         >
-                          <span>{m}</span>
-                          {isSelected && <Check size={12} color="var(--accent-primary)" />}
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', minWidth: 0 }}>
+                            <span style={{ fontWeight: isSelected ? 600 : 500 }}>{displayName}</span>
+                            <span
+                              style={{
+                                fontSize: '9.5px',
+                                color: 'var(--text-muted)',
+                                fontFamily: 'var(--font-mono)',
+                                overflow: 'hidden',
+                                textOverflow: 'ellipsis',
+                                whiteSpace: 'nowrap',
+                              }}
+                            >
+                              {m}
+                            </span>
+                          </div>
+                          {isSelected && <Check size={13} color="var(--accent-primary)" style={{ flexShrink: 0 }} />}
                         </button>
                       );
                     })}
@@ -961,9 +1002,9 @@ export const ConversationView: React.FC<ConversationViewProps> = ({
                       backgroundColor: 'rgba(239, 68, 68, 0.1)',
                       gap: '5px',
                     }}
-                    title="Stop Generating"
+                    title="Stop agent · Ctrl+Shift+Backspace"
                   >
-                    Stop Generating
+                    Stop agent · Ctrl+Shift+Backspace
                   </Button>
                 ) : (
                   <Button

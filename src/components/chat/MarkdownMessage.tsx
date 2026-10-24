@@ -109,48 +109,6 @@ export function preprocessStreamingMarkdown(raw: string, isStreaming?: boolean):
   return text;
 }
 
-/**
- * Remark plugin that inserts a blinking typing cursor into the last leaf container element
- * (paragraph, list item, table cell, etc.) during active token streaming.
- */
-function remarkCursorPlugin() {
-  return (tree: any) => {
-    function findLast(n: any): any {
-      if (!n || !n.children || !Array.isArray(n.children) || n.children.length === 0) return n;
-      return findLast(n.children[n.children.length - 1]);
-    }
-
-    const lastLeaf = findLast(tree);
-    // If the last leaf is a code block, CodeBlock handles the cursor internally within pre/code
-    if (lastLeaf && lastLeaf.type === 'code') {
-      return;
-    }
-
-    function findLastContainer(n: any): any {
-      if (!n || !n.children || !Array.isArray(n.children) || n.children.length === 0) return null;
-      const last = n.children[n.children.length - 1];
-      if (last && last.children && Array.isArray(last.children) && last.children.length > 0) {
-        return findLastContainer(last) || last;
-      }
-      return n;
-    }
-
-    const lastParent = findLastContainer(tree);
-    if (lastParent && Array.isArray(lastParent.children)) {
-      lastParent.children.push({
-        type: 'span',
-        data: {
-          hName: 'span',
-          hProperties: {
-            className: 'aven-typing-cursor',
-            'aria-hidden': 'true',
-          },
-        },
-      });
-    }
-  };
-}
-
 export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStreaming }) => {
   const safeContent = preprocessStreamingMarkdown(content, isStreaming);
 
@@ -176,10 +134,10 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
     }
   };
 
-  const plugins = isStreaming ? [remarkGfm, remarkCursorPlugin] : [remarkGfm];
+  const plugins = [remarkGfm];
 
   return (
-    <div className="aven-markdown-content">
+    <div className="aven-markdown-content" style={{ position: 'relative' }}>
       <ReactMarkdown
         remarkPlugins={plugins}
         components={{
@@ -279,6 +237,17 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
       >
         {safeContent}
       </ReactMarkdown>
+      {isStreaming && (
+        <span
+          className="aven-typing-cursor"
+          style={{
+            display: 'inline-block',
+            verticalAlign: 'middle',
+            marginLeft: '2px',
+          }}
+          aria-hidden="true"
+        />
+      )}
     </div>
   );
 };

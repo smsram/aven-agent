@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { ArrowUp, Sparkles, ChevronDown, Check } from 'lucide-react';
 import { Button } from '../../components/common/Button';
+import { getModelDisplayName, getModelMetadata } from '../../services/modelRegistry';
 
 export interface TaskInputProps {
   onSubmitTask: (prompt: string, model: string) => void;
@@ -103,17 +104,17 @@ export const TaskInput: React.FC<TaskInputProps> = ({
               display: 'inline-flex',
               alignItems: 'center',
               gap: '6px',
-              padding: '4px 8px',
+              padding: '4px 10px',
               borderRadius: 'var(--radius-sm)',
               backgroundColor: 'var(--bg-input)',
               border: '1px solid var(--border-subtle)',
               fontSize: '12px',
               color: 'var(--text-secondary)',
-              fontFamily: 'var(--font-mono)',
+              cursor: 'pointer',
             }}
           >
             <Sparkles size={12} color="var(--accent-primary)" />
-            <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{selectedModel}</span>
+            <span style={{ fontWeight: 500, color: 'var(--text-primary)' }}>{getModelDisplayName(selectedModel)}</span>
             <ChevronDown size={12} color="var(--text-muted)" />
           </button>
 
@@ -122,13 +123,13 @@ export const TaskInput: React.FC<TaskInputProps> = ({
             <div
               style={{
                 position: 'absolute',
-                top: '32px',
+                top: '34px',
                 left: 0,
-                width: '240px',
+                width: '280px',
                 backgroundColor: 'var(--bg-dropdown)',
                 border: '1px solid var(--border-subtle)',
                 borderRadius: 'var(--radius-md)',
-                padding: '4px',
+                padding: '6px',
                 boxShadow: '0 8px 24px rgba(0,0,0,0.5)',
                 zIndex: 50,
               }}
@@ -147,16 +148,18 @@ export const TaskInput: React.FC<TaskInputProps> = ({
               </div>
               {availableModels.map((m) => {
                 const isSelected = m === selectedModel;
+                const meta = getModelMetadata(m);
                 return (
                   <button
                     key={m}
+                    type="button"
                     onClick={() => {
                       onModelChange(m);
                       setShowModelDropdown(false);
                     }}
                     style={{
                       width: '100%',
-                      padding: '6px 8px',
+                      padding: '8px 10px',
                       borderRadius: 'var(--radius-sm)',
                       backgroundColor: isSelected ? 'var(--accent-subtle)' : 'transparent',
                       color: isSelected ? 'var(--text-accent)' : 'var(--text-secondary)',
@@ -164,6 +167,9 @@ export const TaskInput: React.FC<TaskInputProps> = ({
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
+                      cursor: 'pointer',
+                      textAlign: 'left',
+                      border: 'none',
                     }}
                     onMouseEnter={(e) => {
                       if (!isSelected) e.currentTarget.style.backgroundColor = 'var(--bg-panel-hover)';
@@ -172,8 +178,15 @@ export const TaskInput: React.FC<TaskInputProps> = ({
                       if (!isSelected) e.currentTarget.style.backgroundColor = 'transparent';
                     }}
                   >
-                    <span>{m}</span>
-                    {isSelected && <Check size={13} color="var(--accent-primary)" />}
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                      <span style={{ fontWeight: 600, color: isSelected ? 'var(--accent-primary)' : 'var(--text-primary)' }}>
+                        {meta.name}
+                      </span>
+                      <span style={{ fontSize: '10px', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                        {meta.id}
+                      </span>
+                    </div>
+                    {isSelected && <Check size={14} color="var(--accent-primary)" />}
                   </button>
                 );
               })}
