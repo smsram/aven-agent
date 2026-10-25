@@ -1,6 +1,9 @@
+use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
+use tauri::{Emitter, Manager};
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -17,6 +20,47 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP, WM_DESTROY, WM_PAINT, WM_USER,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AutomationSessionState {
+    Idle,
+    Running,
+    WaitingForModel,
+    ExecutingTool,
+    Verifying,
+    Recovering,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl AutomationSessionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Idle => "idle",
+            Self::Running => "running",
+            Self::WaitingForModel => "waiting_for_model",
+            Self::ExecutingTool => "executing_tool",
+            Self::Verifying => "verifying",
+            Self::Recovering => "recovering",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AutomationSessionPayload {
+    pub session_id: String,
+    pub state: String,
+    pub label: String,
+    pub detail: Option<String>,
+    pub target: Option<String>,
+    pub pointer_x: Option<i32>,
+    pub pointer_y: Option<i32>,
+}
+
 static AUTOMATION_SESSION_ACTIVE: AtomicBool = AtomicBool::new(false);
 static OVERLAY_ACTIVE: AtomicBool = AtomicBool::new(false);
 static LAST_TARGET_X: AtomicI32 = AtomicI32::new(-9999);
@@ -24,10 +68,34 @@ static LAST_TARGET_Y: AtomicI32 = AtomicI32::new(-9999);
 static OVERLAY_HWND_RAW: AtomicIsize = AtomicIsize::new(0);
 static OVERLAY_THREAD_INIT: OnceLock<()> = OnceLock::new();
 static ACTIVITY_LABEL: OnceLock<Mutex<String>> = OnceLock::new();
+static CURRENT_SESSION_ID: OnceLock<Mutex<String>> = OnceLock::new();
+static CURRENT_SESSION_STATE: OnceLock<Mutex<AutomationSessionState>> = OnceLock::new();
+static WEBVIEW_OVERLAY_WINDOW: OnceLock<Mutex<Option<tauri::WebviewWindow>>> = OnceLock::new();
 
 const WM_UPDATE_OVERLAY: u32 = WM_USER + 101;
 const WM_HIDE_OVERLAY: u32 = WM_USER + 102;
 const WM_SHOW_OVERLAY: u32 = WM_USER + 103;
+
+fn get_current_session_id() -> &'static Mutex<String> {
+    CURRENT_SESSION_ID.get_or_init(|| Mutex::new(String::new()))
+}
+
+fn get_current_session_state() -> &'static Mutex<AutomationSessionState> {
+    CURRENT_SESSION_STATE.get_or_init(|| Mutex::new(AutomationSessionState::Idle))
+}
+
+fn get_webview_overlay_window() -> &'static Mutex<Option<tauri::WebviewWindow>> {
+    WEBVIEW_OVERLAY_WINDOW.get_or_init(|| Mutex::new(None))
+}
+
+pub fn register_webview_overlay(window: tauri::WebviewWindow) {
+    let mut guard = get_webview_overlay_window().lock().unwrap();
+    *guard = Some(window);
+}
+
+pub fn has_webview_overlay() -> bool {
+    get_webview_overlay_window().lock().unwrap().is_some()
+}
 
 fn get_activity_label() -> &'static Mutex<String> {
     ACTIVITY_LABEL.get_or_init(|| Mutex::new(String::new()))
@@ -133,6 +201,12 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: HDC) {
         let _ = SelectObject(hdc, old_pen);
         let _ = DeleteObject(border_pen);
 
+        // If Webview overlay is active, the HTML/CSS container handles the activity indicator
+        // with crisp DirectWrite typography and SVG animations. Skip GDI text drawing.
+        if has_webview_overlay() {
+            return;
+        }
+
         // NOTE: Custom cursor drawing is completely removed per user instruction.
         // Real Windows mouse pointer is never replaced, hidden, or modified.
 
@@ -165,10 +239,10 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: HDC) {
         let container_x = (primary_origin_x + (pw - container_width) / 2).clamp(vx.abs() + 16, w - container_width - 16);
         let container_y = (primary_origin_y + 16).clamp(16, h - container_height - 16);
 
-        // Dark container background (#141720) with 1px #686DF6 border
-        let bg_brush = CreateSolidBrush(COLORREF(0x00201714));
+        // Transparent container background (NULL_BRUSH) with 1px #686DF6 border
+        let null_brush2 = GetStockObject(windows::Win32::Graphics::Gdi::NULL_BRUSH);
         let border_pen2 = CreatePen(PS_SOLID, 1, COLORREF(0x00F66D68));
-        let old_brush2 = SelectObject(hdc, bg_brush);
+        let old_brush2 = SelectObject(hdc, null_brush2);
         let old_pen2 = SelectObject(hdc, border_pen2);
 
         let _ = RoundRect(
@@ -205,7 +279,6 @@ unsafe fn paint_overlay(hwnd: HWND, hdc: HDC) {
         let _ = TextOutW(hdc, text_x, text_y, &wide_text);
 
         let _ = SelectObject(hdc, old_brush2);
-        let _ = DeleteObject(bg_brush);
         let _ = SelectObject(hdc, old_pen2);
         let _ = DeleteObject(border_pen2);
     }
@@ -261,8 +334,12 @@ pub fn ensure_overlay_initialized() {
                 if let Ok(h) = hwnd {
                     if !h.0.is_null() {
                         // Pure black colorkey (0x00000000) makes the entire interior 100% transparent.
-                        // Only the #686DF6 border and live activity container are visible.
+                        // Only the #686DF6 border is visible.
                         let _ = SetLayeredWindowAttributes(h, COLORREF(0), 0, LWA_COLORKEY);
+                        let _ = windows::Win32::UI::WindowsAndMessaging::SetWindowDisplayAffinity(
+                            h,
+                            windows::Win32::UI::WindowsAndMessaging::WDA_EXCLUDEFROMCAPTURE,
+                        );
                         set_overlay_hwnd(h);
                     }
                 }
@@ -275,6 +352,23 @@ pub fn ensure_overlay_initialized() {
             }
         });
     });
+}
+
+fn emit_session_event(payload: &AutomationSessionPayload) {
+    if let Ok(guard) = get_webview_overlay_window().lock() {
+        if let Some(ref win) = *guard {
+            let _ = win.emit("automation-session-state", payload);
+            let _ = win.app_handle().emit("automation-session-state", payload);
+        }
+    }
+}
+
+pub fn get_current_session_id_str() -> String {
+    get_current_session_id().lock().unwrap().clone()
+}
+
+pub fn get_current_session_state_enum() -> AutomationSessionState {
+    *get_current_session_state().lock().unwrap()
 }
 
 /// Set real-time activity label text to display in the live activity container
@@ -312,12 +406,23 @@ pub fn clear_activity_text() {
 }
 
 /// Authoritative start of a desktop automation session.
-/// Shows the thin #686DF6 border and live activity container.
-pub fn start_desktop_automation() {
+pub fn start_desktop_automation_session(session_id: &str, initial_label: &str) {
     if super::hotkey::is_cancelled() {
         return;
     }
     ensure_overlay_initialized();
+    super::cursor::touch_task_heartbeat(session_id, AutomationSessionState::Running);
+
+    {
+        let mut id_guard = get_current_session_id().lock().unwrap();
+        *id_guard = session_id.to_string();
+    }
+    {
+        let mut st_guard = get_current_session_state().lock().unwrap();
+        *st_guard = AutomationSessionState::Running;
+    }
+
+    set_activity_text(initial_label);
     AUTOMATION_SESSION_ACTIVE.store(true, Ordering::SeqCst);
     OVERLAY_ACTIVE.store(true, Ordering::SeqCst);
 
@@ -326,20 +431,175 @@ pub fn start_desktop_automation() {
             let _ = PostMessageW(hwnd, WM_SHOW_OVERLAY, WPARAM(0), LPARAM(0));
         }
     }
+
+    if let Ok(guard) = get_webview_overlay_window().lock() {
+        if let Some(ref win) = *guard {
+            let _ = win.show();
+        }
+    }
+
+    let payload = AutomationSessionPayload {
+        session_id: session_id.to_string(),
+        state: AutomationSessionState::Running.as_str().to_string(),
+        label: initial_label.to_string(),
+        detail: None,
+        target: None,
+        pointer_x: None,
+        pointer_y: None,
+    };
+    emit_session_event(&payload);
+}
+
+/// Authoritative update of the desktop automation session lifecycle and status
+pub fn update_automation_session(
+    session_id: &str,
+    state: AutomationSessionState,
+    label: &str,
+    detail: Option<String>,
+    target: Option<String>,
+) {
+    if super::hotkey::is_cancelled() {
+        return;
+    }
+    {
+        let curr_id = get_current_session_id().lock().unwrap();
+        if !curr_id.is_empty() && curr_id.as_str() != session_id {
+            // Guard against stale asynchronous events reactivating an already terminated task
+            return;
+        }
+    }
+
+    super::cursor::touch_task_heartbeat(session_id, state);
+
+    {
+        let mut st_guard = get_current_session_state().lock().unwrap();
+        *st_guard = state;
+    }
+
+    set_activity_text(label);
+
+    let payload = AutomationSessionPayload {
+        session_id: session_id.to_string(),
+        state: state.as_str().to_string(),
+        label: label.to_string(),
+        detail,
+        target,
+        pointer_x: {
+            let x = LAST_TARGET_X.load(Ordering::Relaxed);
+            if x != -9999 { Some(x) } else { None }
+        },
+        pointer_y: {
+            let y = LAST_TARGET_Y.load(Ordering::Relaxed);
+            if y != -9999 { Some(y) } else { None }
+        },
+    };
+    emit_session_event(&payload);
 }
 
 /// Authoritative end of desktop automation session.
-/// Immediately hides the border and activity container.
-pub fn stop_desktop_automation() {
-    AUTOMATION_SESSION_ACTIVE.store(false, Ordering::SeqCst);
-    OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
-    clear_activity_text();
-
-    if let Some(hwnd) = get_overlay_hwnd() {
-        unsafe {
-            let _ = PostMessageW(hwnd, WM_HIDE_OVERLAY, WPARAM(0), LPARAM(0));
+pub fn end_desktop_automation_session(
+    session_id: &str,
+    final_state: AutomationSessionState,
+    final_label: &str,
+) {
+    {
+        let curr_id = get_current_session_id().lock().unwrap();
+        if !curr_id.is_empty() && curr_id.as_str() != session_id {
+            return;
         }
     }
+
+    super::cursor::touch_task_heartbeat(session_id, final_state);
+
+    {
+        let mut st_guard = get_current_session_state().lock().unwrap();
+        *st_guard = final_state;
+    }
+
+    set_activity_text(final_label);
+
+    let payload = AutomationSessionPayload {
+        session_id: session_id.to_string(),
+        state: final_state.as_str().to_string(),
+        label: final_label.to_string(),
+        detail: None,
+        target: None,
+        pointer_x: None,
+        pointer_y: None,
+    };
+    emit_session_event(&payload);
+
+    let sid = session_id.to_string();
+    if final_state == AutomationSessionState::Cancelled {
+        // Immediate termination
+        {
+            let mut curr = get_current_session_id().lock().unwrap();
+            if *curr == sid || curr.is_empty() {
+                curr.clear();
+            }
+        }
+        *get_current_session_state().lock().unwrap() = AutomationSessionState::Idle;
+        AUTOMATION_SESSION_ACTIVE.store(false, Ordering::SeqCst);
+        OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+        clear_activity_text();
+
+        if let Some(hwnd) = get_overlay_hwnd() {
+            unsafe {
+                let _ = PostMessageW(hwnd, WM_HIDE_OVERLAY, WPARAM(0), LPARAM(0));
+            }
+        }
+        if let Ok(guard) = get_webview_overlay_window().lock() {
+            if let Some(ref win) = *guard {
+                let _ = win.hide();
+            }
+        }
+    } else {
+        // Completed or Failed: keep terminal state visible briefly so user sees the result, then hide
+        thread::spawn(move || {
+            thread::sleep(Duration::from_millis(800));
+            let mut curr = get_current_session_id().lock().unwrap();
+            if *curr == sid {
+                curr.clear();
+                *get_current_session_state().lock().unwrap() = AutomationSessionState::Idle;
+                AUTOMATION_SESSION_ACTIVE.store(false, Ordering::SeqCst);
+                OVERLAY_ACTIVE.store(false, Ordering::SeqCst);
+                clear_activity_text();
+
+                if let Some(hwnd) = get_overlay_hwnd() {
+                    unsafe {
+                        let _ = PostMessageW(hwnd, WM_HIDE_OVERLAY, WPARAM(0), LPARAM(0));
+                    }
+                }
+                if let Ok(guard) = get_webview_overlay_window().lock() {
+                    if let Some(ref win) = *guard {
+                        let _ = win.hide();
+                    }
+                }
+            }
+        });
+    }
+}
+
+/// Start desktop automation session with auto-generated session id
+pub fn start_desktop_automation() {
+    let sid = {
+        let guard = get_current_session_id().lock().unwrap();
+        if guard.is_empty() {
+            format!("session-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis())
+        } else {
+            guard.clone()
+        }
+    };
+    start_desktop_automation_session(&sid, "Analyzing screen");
+}
+
+/// Stop desktop automation session
+pub fn stop_desktop_automation() {
+    let sid = {
+        let guard = get_current_session_id().lock().unwrap();
+        guard.clone()
+    };
+    end_desktop_automation_session(&sid, AutomationSessionState::Cancelled, "Cancelled");
 }
 
 /// Check if a desktop automation session is currently running
@@ -452,5 +712,34 @@ mod tests {
         update_target_position(500, 300);
         assert_eq!(LAST_TARGET_X.load(Ordering::Relaxed), 500);
         assert_eq!(LAST_TARGET_Y.load(Ordering::Relaxed), 300);
+    }
+
+    #[test]
+    fn test_session_id_lifecycle_and_stale_event_guard() {
+        let sid = "session-test-42";
+        start_desktop_automation_session(sid, "Starting task");
+        assert_eq!(get_current_session_id_str(), sid);
+        assert_eq!(get_current_session_state_enum(), AutomationSessionState::Running);
+
+        // Valid update
+        update_automation_session(sid, AutomationSessionState::ExecutingTool, "Typing", None, None);
+        assert_eq!(get_current_session_state_enum(), AutomationSessionState::ExecutingTool);
+        {
+            let guard = get_activity_label().lock().unwrap();
+            assert_eq!(*guard, "Typing");
+        }
+
+        // Stale update from an old session must be safely ignored
+        update_automation_session("old-stale-session", AutomationSessionState::Running, "Old action", None, None);
+        assert_eq!(get_current_session_state_enum(), AutomationSessionState::ExecutingTool);
+        {
+            let guard = get_activity_label().lock().unwrap();
+            assert_eq!(*guard, "Typing");
+        }
+
+        // Clean termination
+        end_desktop_automation_session(sid, AutomationSessionState::Cancelled, "Cancelled");
+        assert_eq!(get_current_session_state_enum(), AutomationSessionState::Idle);
+        assert!(get_current_session_id_str().is_empty());
     }
 }

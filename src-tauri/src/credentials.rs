@@ -27,10 +27,11 @@ pub struct ProviderPoolStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureCategory {
     AuthFailure,         // 401, 403: Invalid credentials or token expired
+    PermissionOrAccess,  // 404 account/model access, permission denied
     RateLimit,           // 429: Too many requests
     QuotaExhausted,      // 402, 429 quota: Account ran out of credits / billing limit
     ServerOrNetwork,     // 5xx, timeouts, connection drop
-    PermanentRequestErr, // 400 bad request, 404 model not found (do NOT rotate keys)
+    PermanentRequestErr, // 400 bad request (unrecoverable syntax)
 }
 
 /// Mask secret string for safe display and logging (e.g. "sk-a1b2...e5f6")
@@ -186,6 +187,7 @@ impl ProviderCredentialPool {
 
         let duration = match category {
             FailureCategory::AuthFailure => Duration::from_secs(300), // 5 min cooldown for invalid/unauthorized
+            FailureCategory::PermissionOrAccess => Duration::from_secs(300), // 5 min cooldown for account/permission
             FailureCategory::RateLimit => {
                 Duration::from_secs(retry_after_secs.unwrap_or(30).clamp(5, 300))
             }

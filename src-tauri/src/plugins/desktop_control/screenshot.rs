@@ -10,8 +10,9 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, HBITMAP, HDC, HGDIOBJ, LOGPIXELSY, SRCCOPY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowTextW, SM_CXSCREEN,
-    SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+    GetClassNameW, GetForegroundWindow, GetSystemMetrics, GetWindowRect, GetWindowTextW,
+    GetWindowThreadProcessId, SM_CXSCREEN, SM_CXVIRTUALSCREEN, SM_CYSCREEN, SM_CYVIRTUALSCREEN,
+    SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -38,6 +39,8 @@ pub struct ScreenshotResult {
     pub window_title: Option<String>,
     pub window_id: Option<i64>,
     pub is_crop: bool,
+    pub is_dialog: bool,
+    pub foreground_process: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub crop_rect: Option<CropRect>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -59,7 +62,7 @@ pub struct ScreenshotCaptureOptions<'a> {
 impl<'a> Default for ScreenshotCaptureOptions<'a> {
     fn default() -> Self {
         Self {
-            target: "foreground_window",
+            target: "virtual_desktop",
             target_hwnd: None,
             crop: None,
             max_dimension: Some(1440),
@@ -77,53 +80,58 @@ pub fn capture_screenshot_advanced(
     default_dir: &Path,
 ) -> Result<ScreenshotResult, String> {
     let target_lower = opts.target.to_lowercase();
-    let (hwnd, src_x, src_y, orig_w, orig_h, title, win_id, desktop_origin_x, desktop_origin_y) =
+    let (hwnd, src_x, src_y, orig_w, orig_h, title, win_id, is_dialog, foreground_process, desktop_origin_x, desktop_origin_y) =
         match target_lower.as_str() {
             "foreground_window" | "foreground" => {
                 let fg = unsafe { GetForegroundWindow() };
                 if fg.0.is_null() {
                     return Err("No active foreground window found".to_string());
                 }
-                let (rect, title) = get_window_rect_and_title(fg)?;
+                let (rect, title, is_dlg, proc_name) = get_window_details_internal(fg)?;
                 let w = rect.right - rect.left;
                 let h = rect.bottom - rect.top;
-                (fg, 0, 0, w, h, Some(title), Some(fg.0 as i64), rect.left, rect.top)
+                // Capture from desktop DC at the window's screen rect so modal dialogs, menus, and overlapping popups are included
+                (HWND::default(), rect.left, rect.top, w, h, Some(title), Some(fg.0 as i64), is_dlg, proc_name, rect.left, rect.top)
             }
             "selected_window" | "window" => {
                 let h_val = opts.target_hwnd.ok_or_else(|| {
                     "Missing required parameter 'target_hwnd' (or 'window_id') for window screenshot".to_string()
                 })?;
                 let wnd = HWND(h_val as *mut _);
-                let (rect, title) = get_window_rect_and_title(wnd)?;
+                let (rect, title, is_dlg, proc_name) = get_window_details_internal(wnd)?;
                 let w = rect.right - rect.left;
                 let h = rect.bottom - rect.top;
-                (wnd, 0, 0, w, h, Some(title), Some(h_val), rect.left, rect.top)
+                (HWND::default(), rect.left, rect.top, w, h, Some(title), Some(h_val), is_dlg, proc_name, rect.left, rect.top)
             }
             "primary_monitor" | "monitor" => {
                 let w = unsafe { GetSystemMetrics(SM_CXSCREEN) };
                 let h = unsafe { GetSystemMetrics(SM_CYSCREEN) };
-                (HWND::default(), 0, 0, w, h, Some("Primary Monitor".to_string()), None, 0, 0)
+                let (_fg_title, fg_id, is_dlg, proc_name) = inspect_foreground();
+                (HWND::default(), 0, 0, w, h, Some("Primary Monitor".to_string()), fg_id, is_dlg, proc_name, 0, 0)
             }
-            "all_monitors" | "virtual_desktop" => {
+            "all_monitors" | "virtual_desktop" | "desktop" | "screen" | "" => {
                 let vx = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
                 let vy = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
                 let vw = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
                 let vh = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+                let (fg_title, fg_id, is_dlg, proc_name) = inspect_foreground();
                 (
                     HWND::default(),
                     vx,
                     vy,
                     vw,
                     vh,
-                    Some("Virtual Desktop".to_string()),
-                    None,
+                    fg_title.or_else(|| Some("Virtual Desktop".to_string())),
+                    fg_id,
+                    is_dlg,
+                    proc_name,
                     vx,
                     vy,
                 )
             }
             other => {
                 return Err(format!(
-                    "Unsupported screenshot target: '{other}'. Valid options: foreground_window, selected_window, primary_monitor, all_monitors"
+                    "Unsupported screenshot target: '{other}'. Valid options: virtual_desktop, all_monitors, foreground_window, selected_window, primary_monitor"
                 ))
             }
         };
@@ -135,19 +143,9 @@ pub fn capture_screenshot_advanced(
         ));
     }
 
-    let was_overlay_active = super::overlay::is_overlay_active();
-    if was_overlay_active {
-        super::overlay::hide_overlay();
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-
-    let raw_rgba_res = capture_gdi_pixels(hwnd, src_x, src_y, orig_w, orig_h);
-
-    if was_overlay_active {
-        super::overlay::show_overlay();
-    }
-
-    let raw_image = raw_rgba_res?;
+    // Windows DWM automatically excludes windows with WDA_EXCLUDEFROMCAPTURE from capture.
+    // We do NOT hide the overlay or sleep, keeping the border smoothly and continuously visible.
+    let raw_image = capture_gdi_pixels(hwnd, src_x, src_y, orig_w, orig_h)?;
 
     // Handle cropping if requested
     let (final_raw_image, crop_origin_x, crop_origin_y, is_crop) = if let Some(crop) = opts.crop {
@@ -232,6 +230,8 @@ pub fn capture_screenshot_advanced(
         window_title: title,
         window_id: win_id,
         is_crop,
+        is_dialog,
+        foreground_process,
         crop_rect: opts.crop,
         image_base64,
     })
@@ -351,7 +351,51 @@ pub fn get_system_dpi_scale() -> f64 {
     1.0
 }
 
-fn get_window_rect_and_title(hwnd: HWND) -> Result<(RECT, String), String> {
+fn inspect_foreground() -> (Option<String>, Option<i64>, bool, Option<String>) {
+    unsafe {
+        let fg = GetForegroundWindow();
+        if fg.0.is_null() {
+            return (None, None, false, None);
+        }
+        let mut title_buf = [0u16; 512];
+        let t_len = GetWindowTextW(fg, &mut title_buf);
+        let title = if t_len > 0 {
+            Some(String::from_utf16_lossy(&title_buf[..t_len as usize]))
+        } else {
+            None
+        };
+
+        let mut class_buf = [0u16; 256];
+        let c_len = GetClassNameW(fg, &mut class_buf);
+        let class_name = if c_len > 0 {
+            String::from_utf16_lossy(&class_buf[..c_len as usize])
+        } else {
+            String::new()
+        };
+
+        let is_dialog = class_name == "#32770"
+            || title.as_deref().map_or(false, |t| {
+                let tl = t.to_lowercase();
+                tl.contains("open")
+                    || tl.contains("save")
+                    || tl.contains("browse")
+                    || tl.contains("select file")
+                    || tl.contains("choose file")
+            });
+
+        let mut pid: u32 = 0;
+        let _ = GetWindowThreadProcessId(fg, Some(&mut pid));
+        let proc_name = if pid > 0 {
+            Some(super::windows::get_process_name_by_pid(pid))
+        } else {
+            None
+        };
+
+        (title, Some(fg.0 as i64), is_dialog, proc_name)
+    }
+}
+
+fn get_window_details_internal(hwnd: HWND) -> Result<(RECT, String, bool, Option<String>), String> {
     let mut rect = RECT::default();
     unsafe {
         let _ = GetWindowRect(hwnd, &mut rect);
@@ -365,7 +409,35 @@ fn get_window_rect_and_title(hwnd: HWND) -> Result<(RECT, String), String> {
         "Untitled Window".to_string()
     };
 
-    Ok((rect, title))
+    let mut class_buf = [0u16; 256];
+    let c_len = unsafe { GetClassNameW(hwnd, &mut class_buf) };
+    let class_name = if c_len > 0 {
+        String::from_utf16_lossy(&class_buf[..c_len as usize])
+    } else {
+        String::new()
+    };
+
+    let is_dialog = class_name == "#32770"
+        || {
+            let tl = title.to_lowercase();
+            tl.contains("open")
+                || tl.contains("save")
+                || tl.contains("browse")
+                || tl.contains("select file")
+                || tl.contains("choose file")
+        };
+
+    let mut pid: u32 = 0;
+    unsafe {
+        let _ = GetWindowThreadProcessId(hwnd, Some(&mut pid));
+    }
+    let proc_name = if pid > 0 {
+        Some(super::windows::get_process_name_by_pid(pid))
+    } else {
+        None
+    };
+
+    Ok((rect, title, is_dialog, proc_name))
 }
 
 fn capture_gdi_pixels(
@@ -463,5 +535,44 @@ fn capture_gdi_pixels(
             .ok_or_else(|| "Failed to construct RgbaImage from raw pixel buffer".to_string())?;
 
         Ok(rgba_img)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_screenshot_options_default_to_virtual_desktop() {
+        let opts = ScreenshotCaptureOptions::default();
+        assert_eq!(opts.target, "virtual_desktop");
+        assert_eq!(opts.format, Some("jpeg"));
+        assert_eq!(opts.max_dimension, Some(1440));
+    }
+
+    #[test]
+    fn test_screenshot_result_dialog_fields() {
+        let res = ScreenshotResult {
+            file_path: "C:\\tmp\\shot.jpg".to_string(),
+            width: 1920,
+            height: 1080,
+            original_width: 1920,
+            original_height: 1080,
+            scale_x: 1.0,
+            scale_y: 1.0,
+            desktop_origin_x: 0,
+            desktop_origin_y: 0,
+            dpi_scale: 1.0,
+            format: "jpeg".to_string(),
+            window_title: Some("Save As".to_string()),
+            window_id: Some(12345),
+            is_crop: false,
+            is_dialog: true,
+            foreground_process: Some("notepad.exe".to_string()),
+            crop_rect: None,
+            image_base64: None,
+        };
+        assert!(res.is_dialog);
+        assert_eq!(res.foreground_process.as_deref(), Some("notepad.exe"));
     }
 }

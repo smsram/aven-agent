@@ -144,7 +144,7 @@ unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL 
     }
 }
 
-fn get_process_name_by_pid(pid: u32) -> String {
+pub fn get_process_name_by_pid(pid: u32) -> String {
     if pid == 0 {
         return "System".to_string();
     }

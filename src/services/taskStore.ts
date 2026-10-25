@@ -20,6 +20,42 @@ import { listen } from '@tauri-apps/api/event';
 const SYSTEM_PROMPT =
   'You are Aven, a sophisticated engineering AI assistant. Provide concise, helpful, and well-structured answers using clean Markdown formatting.';
 
+export function sanitizeProgressDescription(desc?: string): string {
+  if (!desc) return 'Working';
+  const trimmed = desc.trim();
+  if (!trimmed) return 'Working';
+
+  const lower = trimmed.toLowerCase();
+  if (
+    lower.includes('<!doctype') ||
+    lower.includes('<html') ||
+    lower.includes('<body') ||
+    lower.includes('<div') ||
+    lower.includes('<svg') ||
+    lower.includes('<script') ||
+    lower.includes('<style') ||
+    (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
+    (trimmed.startsWith('[') && trimmed.endsWith(']'))
+  ) {
+    return 'Analyzing screen';
+  }
+
+  const clean = trimmed.replace(/<[^>]*>/g, '').trim();
+  const firstLine = clean.split(/[\r\n]+/)[0]?.trim() || 'Working';
+
+  if (firstLine.includes('/') || firstLine.includes('\\')) {
+    if (firstLine.toLowerCase().endsWith('.html') || firstLine.toLowerCase().endsWith('.js') || firstLine.toLowerCase().endsWith('.ts')) {
+      return 'Accessing project file';
+    }
+  }
+
+  return firstLine.length > 50 ? firstLine.slice(0, 47) + '...' : firstLine;
+}
+
+import { sanitizeAssistantVisibleText } from '../components/chat/markdownUtils';
+export { sanitizeAssistantVisibleText };
+
+
 function toPersistedConversation(task: AgentTask): PersistedConversation {
   return {
     id: task.id,
@@ -523,9 +559,10 @@ class TaskStore {
       if (t.id === payload.conversation_id) {
         const updatedMessages = (t.messages || []).map((m) => {
           if (m.id === payload.message_id) {
+            const combined = (m.text || '') + chunkText;
             return {
               ...m,
-              text: (m.text || '') + chunkText,
+              text: sanitizeAssistantVisibleText(combined),
               status: 'thinking' as const,
             };
           }
@@ -551,6 +588,7 @@ class TaskStore {
 
   handleActivityStatus(payload: ChatActivityStatusPayload): void {
     if (!payload || !payload.conversation_id || !payload.message_id) return;
+    const sanitizedDescription = sanitizeProgressDescription(payload.description);
     let targetTask: AgentTask | null = null;
 
     this.tasks = this.tasks.map((t) => {
@@ -569,27 +607,28 @@ class TaskStore {
             } else {
               // Mark previous running steps as completed
               for (const s of currentSteps) {
-                if (s.status === 'running' && s.label !== payload.description) {
+                if (s.status === 'running' && s.label !== sanitizedDescription) {
                   s.status = 'completed';
                 }
               }
 
               // Check if step with this description or tool_name exists
               const existingIndex = currentSteps.findIndex(
-                (s) => s.label === payload.description || (payload.tool_name && s.tool_name === payload.tool_name)
+                (s) => s.label === sanitizedDescription || (payload.tool_name && s.tool_name === payload.tool_name)
               );
 
               if (existingIndex >= 0) {
                 currentSteps[existingIndex] = {
                   ...currentSteps[existingIndex],
                   status: 'running',
+                  label: sanitizedDescription,
                   integration_id: payload.integration_id || currentSteps[existingIndex].integration_id,
                   tool_name: payload.tool_name || currentSteps[existingIndex].tool_name,
                 };
-              } else if (payload.description) {
+              } else if (sanitizedDescription) {
                 currentSteps.push({
                   id: `step_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
-                  label: payload.description,
+                  label: sanitizedDescription,
                   status: 'running',
                   integration_id: payload.integration_id,
                   tool_name: payload.tool_name,
@@ -599,11 +638,11 @@ class TaskStore {
             }
 
             const newLogs = m.logs ? [...m.logs] : [];
-            if (payload.description && !newLogs.some((l) => l.message === payload.description)) {
+            if (sanitizedDescription && !newLogs.some((l) => l.message === sanitizedDescription)) {
               newLogs.push({
                 timestamp: new Date().toLocaleTimeString(),
                 level: 'info' as const,
-                message: payload.description,
+                message: sanitizedDescription,
               });
             }
 
@@ -614,7 +653,7 @@ class TaskStore {
                   ? undefined
                   : {
                       status: payload.status,
-                      description: payload.description,
+                      description: sanitizedDescription,
                       integration_id: payload.integration_id,
                       tool_name: payload.tool_name,
                     },
@@ -690,9 +729,10 @@ class TaskStore {
               duration_formatted: durationFormatted,
             };
 
+            const rawFinal = payload.full_text || m.text || '';
             return {
               ...m,
-              text: payload.full_text || m.text,
+              text: sanitizeAssistantVisibleText(rawFinal),
               status: finalStatus,
               activityStatus: undefined,
               processSteps: finalizedSteps,

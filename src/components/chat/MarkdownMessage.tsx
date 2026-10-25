@@ -77,82 +77,87 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, code, isStreaming }) =>
   );
 };
 
+import { preprocessStreamingMarkdown, isSafeUrl } from './markdownUtils';
+export { preprocessStreamingMarkdown, isSafeUrl };
+
 /**
- * Preprocesses streaming markdown text to avoid exposing incomplete syntax
- * like dangling `[`, `[Label](`, or unclosed `[Label](url...` without `)`.
+ * Remark plugin to transform single line breaks inside paragraphs into `<br />` breaks.
+ * Preserves intentional linebreaks in AI responses without requiring double-spacing.
  */
-export function preprocessStreamingMarkdown(raw: string, isStreaming?: boolean): string {
-  if (!raw) return '';
-  if (!isStreaming) return raw;
+const remarkLineBreaks = () => (tree: any) => {
+  function process(node: any) {
+    if (!node || !node.children) return;
+    if (node.type === 'code' || node.type === 'inlineCode' || node.type === 'table') return;
 
-  let text = raw;
-
-  // 1. If text ends with an unclosed link like `[Label](https://domain.com/path` (missing `)`)
-  // Temporarily close with `)` so ReactMarkdown renders it as a valid link instead of raw syntax
-  const unclosedLinkMatch = /\[([^\]]+)\]\((https?:\/\/[^\s\)]*)$/.exec(text);
-  if (unclosedLinkMatch) {
-    text = `${text})`;
-  } else {
-    // 2. If text ends with `[Label](` without any URL yet
-    const unstartedUrlMatch = /\[([^\]]+)\]\($/.exec(text);
-    if (unstartedUrlMatch) {
-      // Just render the label text safely without raw bracket delimiters
-      text = text.slice(0, unstartedUrlMatch.index) + unstartedUrlMatch[1];
-    } else {
-      // 3. If text ends with dangling `[`
-      if (text.endsWith('[')) {
-        text = text.slice(0, -1);
+    const newChildren: any[] = [];
+    for (const child of node.children) {
+      if (child.type === 'text' && child.value && child.value.includes('\n') && node.type !== 'tableCell') {
+        const parts = child.value.split('\n');
+        for (let i = 0; i < parts.length; i++) {
+          if (parts[i]) {
+            newChildren.push({ type: 'text', value: parts[i] });
+          }
+          if (i < parts.length - 1) {
+            newChildren.push({ type: 'break' });
+          }
+        }
+      } else {
+        process(child);
+        newChildren.push(child);
       }
     }
+    node.children = newChildren;
   }
-
-  return text;
-}
+  process(tree);
+};
 
 /**
- * Custom remark plugin to keep the typing cursor immediately after the
- * latest rendered response content, inline with the final token or line,
- * supporting paragraphs, lists, tables, blockquotes, and headings.
+ * Remark plugin to safely place the typing cursor strictly inside inline containers
+ * (paragraphs, headings, blockquotes, or table cells).
+ * Prevents invalid HTML nesting (such as `span` directly inside `table` or `ul`) which
+ * caused React 19 hydration/render exceptions.
  */
-const remarkStreamingCursor = () => (tree: any) => {
-  function appendCursor(node: any): boolean {
+const remarkSafeStreamingCursor = () => (tree: any) => {
+  let placed = false;
+
+  function appendToInline(node: any): boolean {
     if (!node || !node.children || node.children.length === 0) return false;
-    const lastChild = node.children[node.children.length - 1];
-    if (
-      [
-        'paragraph',
-        'heading',
-        'blockquote',
-        'listItem',
-        'list',
-        'table',
-        'tableRow',
-        'tableCell',
-        'strong',
-        'emphasis',
-        'delete',
-        'link',
-      ].includes(lastChild.type)
-    ) {
-      if (appendCursor(lastChild)) return true;
+
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i];
+
+      // Code blocks handle their own cursor inside pre element
+      if (child.type === 'code') {
+        return true;
+      }
+
+      // Safe inline containers where a <span> can validly exist
+      if (['paragraph', 'heading', 'tableCell', 'blockquote'].includes(child.type)) {
+        child.children.push({
+          type: 'cursorMarker',
+          data: {
+            hName: 'span',
+            hProperties: {
+              className: 'aven-typing-cursor',
+              'aria-hidden': 'true',
+            },
+          },
+        });
+        return true;
+      }
+
+      // Traverse nested structures (lists, table rows, emphasis, strong)
+      if (['listItem', 'list', 'table', 'tableRow', 'strong', 'emphasis', 'delete'].includes(child.type)) {
+        if (appendToInline(child)) {
+          return true;
+        }
+      }
     }
-    // Code blocks render the cursor inside CodeBlock's pre element
-    if (lastChild.type === 'code') {
-      return true;
-    }
-    node.children.push({
-      type: 'cursorMarker',
-      data: {
-        hName: 'span',
-        hProperties: {
-          className: 'aven-typing-cursor',
-          'aria-hidden': 'true',
-        },
-      },
-    });
-    return true;
+    return false;
   }
-  appendCursor(tree);
+
+  placed = appendToInline(tree);
+  tree._hasCursor = placed;
 };
 
 export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStreaming }) => {
@@ -162,14 +167,13 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
     e.preventDefault();
     if (!href) return;
 
-    // Safety check: only allow http: and https: protocols
-    try {
-      const url = new URL(href);
-      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-        console.warn('Rejected unsafe link protocol:', url.protocol);
-        return;
-      }
+    // Safety check: only allow http:, https:, and mailto: protocols
+    if (!isSafeUrl(href)) {
+      console.warn('Rejected unsafe link protocol for href:', href);
+      return;
+    }
 
+    try {
       if (isTauriDesktop()) {
         await openUrl(href);
       } else {
@@ -180,7 +184,9 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
     }
   };
 
-  const plugins = isStreaming ? [remarkGfm, remarkStreamingCursor] : [remarkGfm];
+  const plugins = isStreaming
+    ? [remarkGfm, remarkLineBreaks, remarkSafeStreamingCursor]
+    : [remarkGfm, remarkLineBreaks];
 
   if (!safeContent) {
     if (isStreaming) {
@@ -198,6 +204,10 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
       <ReactMarkdown
         remarkPlugins={plugins}
         components={{
+          // Eliminate invalid <pre><div>...</div></pre> wrapping by rendering children directly.
+          pre({ children }) {
+            return <>{children}</>;
+          },
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '');
             const codeString = String(children).replace(/\n$/, '');
@@ -214,21 +224,22 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
             }
 
             return (
-              <code {...props}>
+              <code className="aven-inline-code" {...props}>
                 {children}
               </code>
             );
           },
           a({ href, children, ...props }) {
-            // Guarantee we never show empty link syntax `[]`
+            const isSafe = href && (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:'));
             const linkText = children && String(children).trim().length > 0 ? children : href || 'Link';
             return (
               <a
-                href={href}
+                href={isSafe ? href : undefined}
                 onClick={(e) => handleOpenLink(e, href)}
                 className="inline-flex items-center gap-0.5"
                 title={href}
                 rel="noopener noreferrer"
+                target="_blank"
                 {...props}
               >
                 <span>{linkText}</span>
@@ -281,14 +292,33 @@ export const MarkdownMessage: React.FC<MarkdownMessageProps> = ({ content, isStr
           ol({ children }) {
             return <ol>{children}</ol>;
           },
-          li({ children }) {
-            return <li>{children}</li>;
+          li({ children, ...props }) {
+            return <li {...props}>{children}</li>;
           },
           p({ children }) {
             return <p>{children}</p>;
           },
           hr() {
             return <hr style={{ margin: '14px 0', border: 'none', borderTop: '1px solid var(--border-subtle)' }} />;
+          },
+          input({ type, checked, ...props }) {
+            if (type === 'checkbox') {
+              return (
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  readOnly
+                  style={{
+                    marginRight: '6px',
+                    verticalAlign: 'middle',
+                    accentColor: 'var(--accent-primary)',
+                    cursor: 'default',
+                  }}
+                  {...props}
+                />
+              );
+            }
+            return <input type={type} checked={checked} {...props} />;
           },
         }}
       >

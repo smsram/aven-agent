@@ -192,6 +192,46 @@ pub fn run() {
 
             let handle = app.handle().clone();
             plugins::desktop_control::hotkey::init_global_emergency_hotkey(handle.clone());
+
+            // Create transparent, click-through HTML/CSS activity container overlay window
+            if let Ok(overlay_win) = tauri::WebviewWindowBuilder::new(
+                app,
+                "activity-overlay",
+                tauri::WebviewUrl::App("index.html#overlay".into()),
+            )
+            .title("Aven Activity Overlay")
+            .inner_size(440.0, 64.0)
+            .decorations(false)
+            .transparent(true)
+            .shadow(false)
+            .always_on_top(true)
+            .resizable(false)
+            .skip_taskbar(true)
+            .visible(false)
+            .build()
+            {
+                let _ = overlay_win.set_ignore_cursor_events(true);
+                // Center at top of primary screen
+                let pw = unsafe { windows::Win32::UI::WindowsAndMessaging::GetSystemMetrics(windows::Win32::UI::WindowsAndMessaging::SM_CXSCREEN) };
+                let x = ((pw - 440) / 2).max(10);
+                let _ = overlay_win.set_position(tauri::PhysicalPosition::new(x, 16));
+
+                if let Ok(raw_hwnd) = overlay_win.hwnd() {
+                    unsafe {
+                        use windows::Win32::UI::WindowsAndMessaging::*;
+                        let hwnd = windows::Win32::Foundation::HWND(raw_hwnd.0);
+                        let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE);
+                        let _ = SetWindowLongW(
+                            hwnd,
+                            GWL_EXSTYLE,
+                            ex_style | WS_EX_TRANSPARENT.0 as i32 | WS_EX_NOACTIVATE.0 as i32 | WS_EX_TOOLWINDOW.0 as i32,
+                        );
+                        let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+                    }
+                }
+                plugins::desktop_control::overlay::register_webview_overlay(overlay_win);
+            }
+
             tauri::async_runtime::spawn(async move {
                 pm_clone.load_configs_from_disk(&handle).await;
             });

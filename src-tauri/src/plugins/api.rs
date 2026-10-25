@@ -165,11 +165,13 @@ pub async fn execute_gemini_search(
     api_key_str: &str,
     query: &str,
 ) -> Result<GeminiSearchResult, String> {
-    let keys: Vec<&str> = api_key_str
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let mut keys: Vec<&str> = Vec::new();
+    for token in api_key_str.split([',', '\n', '\r']) {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() && !keys.contains(&trimmed) {
+            keys.push(trimmed);
+        }
+    }
 
     if keys.is_empty() {
         return Err("Gemini API key is required. Please configure your key in Plugins → Google Search.".into());
@@ -201,7 +203,7 @@ pub async fn execute_gemini_search(
         let response = match response_res {
             Ok(r) => r,
             Err(e) => {
-                last_err = format!("Key #{idx} ({masked}): Connection error: {e}");
+                last_err = format!("Key #{} ({masked}): Connection error: {e}", idx + 1);
                 continue;
             }
         };
@@ -219,10 +221,10 @@ pub async fn execute_gemini_search(
             let err_text = response.text().await.unwrap_or_default();
             last_err = match code {
                 400 => format!("HTTP 400 Bad Request: Check query format. ({err_text})"),
-                401 | 403 => format!("Key #{idx} ({masked}): HTTP 401/403 Unauthorized (Invalid API Key or missing permissions)."),
-                429 => format!("Key #{idx} ({masked}): HTTP 429 Rate limit or quota exhausted."),
-                _ if code >= 500 => format!("Key #{idx} ({masked}): Google Gemini server error (HTTP {code})."),
-                _ => format!("Key #{idx} ({masked}): HTTP {code} error: {err_text}"),
+                401 | 403 => format!("Key #{} ({masked}): HTTP 401/403 Unauthorized (Invalid API Key or missing permissions).", idx + 1),
+                429 => format!("Key #{} ({masked}): HTTP 429 Rate limit or quota exhausted.", idx + 1),
+                _ if code >= 500 => format!("Key #{} ({masked}): Google Gemini server error (HTTP {code}).", idx + 1),
+                _ => format!("Key #{} ({masked}): HTTP {code} error: {err_text}", idx + 1),
             };
 
             // Permanent client error (bad request) should not rotate
@@ -241,11 +243,13 @@ pub async fn test_gemini_connection(
     client: &reqwest::Client,
     api_key_str: &str,
 ) -> Result<ApiTestResult, String> {
-    let keys: Vec<&str> = api_key_str
-        .split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .collect();
+    let mut keys: Vec<&str> = Vec::new();
+    for token in api_key_str.split([',', '\n', '\r']) {
+        let trimmed = token.trim();
+        if !trimmed.is_empty() && !keys.contains(&trimmed) {
+            keys.push(trimmed);
+        }
+    }
 
     if keys.is_empty() {
         return Ok(ApiTestResult {

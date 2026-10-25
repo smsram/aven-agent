@@ -9,6 +9,29 @@ static SESSION_GENERATION: AtomicU64 = AtomicU64::new(0);
 static LAST_ACTIVITY_TIME: OnceLock<Mutex<Instant>> = OnceLock::new();
 static LIFECYCLE_INITIALIZED: OnceLock<()> = OnceLock::new();
 
+#[derive(Debug, Clone)]
+pub struct TaskActivityTracker {
+    pub session_id: String,
+    pub last_heartbeat: Instant,
+    pub last_progress: Instant,
+    pub session_state: super::overlay::AutomationSessionState,
+    pub timed_out: bool,
+}
+
+static TASK_ACTIVITY_TRACKER: OnceLock<Mutex<TaskActivityTracker>> = OnceLock::new();
+
+fn get_task_tracker() -> &'static Mutex<TaskActivityTracker> {
+    TASK_ACTIVITY_TRACKER.get_or_init(|| {
+        Mutex::new(TaskActivityTracker {
+            session_id: String::new(),
+            last_heartbeat: Instant::now(),
+            last_progress: Instant::now(),
+            session_state: super::overlay::AutomationSessionState::Idle,
+            timed_out: false,
+        })
+    })
+}
+
 fn get_last_activity_time() -> &'static Mutex<Instant> {
     LAST_ACTIVITY_TIME.get_or_init(|| Mutex::new(Instant::now()))
 }
@@ -46,19 +69,51 @@ fn ensure_lifecycle_initialized() {
             );
         }
 
-        // 2. Background inactivity watchdog to auto-clean overlay if tasks stall
+        // 2. Background inactivity watchdog to auto-clean overlay if tasks genuinely stall
         thread::spawn(|| {
             loop {
                 thread::sleep(Duration::from_millis(500));
                 if is_in_active_session() {
                     let now = Instant::now();
-                    let elapsed = {
-                        let guard = get_last_activity_time().lock().unwrap();
-                        now.duration_since(*guard)
+                    let (sid, state, elapsed_heartbeat, already_timed_out) = {
+                        let guard = get_task_tracker().lock().unwrap();
+                        (
+                            guard.session_id.clone(),
+                            guard.session_state,
+                            now.duration_since(guard.last_heartbeat),
+                            guard.timed_out,
+                        )
                     };
-                    // If no desktop actions have occurred for 30 seconds, auto-clean
-                    if elapsed > Duration::from_secs(30) {
-                        eprintln!("[Aven Watchdog] Inactivity timeout reached. Cleaning up desktop overlay.");
+
+                    if already_timed_out {
+                        // Already handled timeout for this stall event; do not log or clean again
+                        continue;
+                    }
+
+                    // Define state-aware timeout thresholds:
+                    // - WaitingForModel: allow up to 90s (AI API call / model inference wait)
+                    // - ExecutingTool / Verifying / Recovering: allow up to 60s
+                    // - Idle / Running with no input or heartbeat: 45s threshold
+                    let timeout_threshold = match state {
+                        super::overlay::AutomationSessionState::WaitingForModel => Duration::from_secs(90),
+                        super::overlay::AutomationSessionState::ExecutingTool
+                        | super::overlay::AutomationSessionState::Verifying
+                        | super::overlay::AutomationSessionState::Recovering => Duration::from_secs(60),
+                        _ => Duration::from_secs(45),
+                    };
+
+                    if elapsed_heartbeat > timeout_threshold {
+                        // Mark as timed out so we log and clean up EXACTLY ONCE
+                        {
+                            let mut guard = get_task_tracker().lock().unwrap();
+                            guard.timed_out = true;
+                            guard.last_heartbeat = now;
+                        }
+
+                        eprintln!(
+                            "[Aven Watchdog] Inactivity timeout reached for session '{}' (state: {:?}, elapsed: {:.1?}s). Cleaning up desktop overlay.",
+                            sid, state, elapsed_heartbeat
+                        );
                         force_restore_and_cleanup();
                     }
                 }
@@ -72,10 +127,43 @@ unsafe extern "system" fn console_ctrl_handler(_ctrl_type: u32) -> BOOL {
     BOOL(0)
 }
 
+/// Touch the task heartbeat and record current state
+pub fn touch_task_heartbeat(session_id: &str, state: super::overlay::AutomationSessionState) {
+    let now = Instant::now();
+    {
+        let mut tracker = get_task_tracker().lock().unwrap();
+        tracker.session_id = session_id.to_string();
+        tracker.last_heartbeat = now;
+        tracker.session_state = state;
+        tracker.timed_out = false;
+        match state {
+            super::overlay::AutomationSessionState::ExecutingTool
+            | super::overlay::AutomationSessionState::Verifying
+            | super::overlay::AutomationSessionState::Recovering => {
+                tracker.last_progress = now;
+            }
+            _ => {}
+        }
+    }
+    {
+        let mut guard = get_last_activity_time().lock().unwrap();
+        *guard = now;
+    }
+}
+
 /// Touch the activity timestamp to keep the session alive
 pub fn touch_activity() {
-    let mut guard = get_last_activity_time().lock().unwrap();
-    *guard = Instant::now();
+    let now = Instant::now();
+    {
+        let mut guard = get_last_activity_time().lock().unwrap();
+        *guard = now;
+    }
+    {
+        let mut tracker = get_task_tracker().lock().unwrap();
+        tracker.last_heartbeat = now;
+        tracker.last_progress = now;
+        tracker.timed_out = false;
+    }
 }
 
 /// Acquire an active desktop control session.
@@ -131,6 +219,12 @@ pub fn perform_restoration() {
 pub fn force_restore_and_cleanup() {
     SESSION_REF_COUNT.store(0, Ordering::SeqCst);
     SESSION_GENERATION.fetch_add(1, Ordering::SeqCst);
+    {
+        let mut tracker = get_task_tracker().lock().unwrap();
+        tracker.timed_out = true;
+        tracker.session_state = super::overlay::AutomationSessionState::Idle;
+        tracker.last_heartbeat = Instant::now();
+    }
     super::overlay::stop_desktop_automation();
     super::input::release_all_input_locks();
 }

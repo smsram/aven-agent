@@ -10,6 +10,22 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+    <script>
+      if (typeof window !== 'undefined' && window.location.hash === '#overlay') {
+        document.documentElement.classList.add('overlay-mode');
+        document.documentElement.style.background = 'transparent';
+        document.documentElement.style.backgroundColor = 'transparent';
+      }
+    </script>
+    <style>
+      html.overlay-mode,
+      html.overlay-mode body,
+      html.overlay-mode #root {
+        background: transparent !important;
+        background-color: transparent !important;
+        overflow: hidden !important;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

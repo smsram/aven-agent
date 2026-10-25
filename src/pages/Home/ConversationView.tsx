@@ -18,7 +18,7 @@ import { Button } from '../../components/common/Button';
 import { MarkdownMessage } from '../../components/chat/MarkdownMessage';
 import { IntegrationIcon } from '../../components/icons/IntegrationIcon';
 import { ErrorBoundary } from '../../components/common/ErrorBoundary';
-import { taskStore } from '../../services/taskStore';
+import { taskStore, sanitizeProgressDescription } from '../../services/taskStore';
 import {
   getModelDisplayName,
   DEFAULT_MODEL_ID,
@@ -209,10 +209,10 @@ const ProcessActivityBar: React.FC<{
   let activeIntegrationId = activeStatus?.integration_id;
 
   if (activeStatus?.description) {
-    summaryLabel = activeStatus.description;
+    summaryLabel = sanitizeProgressDescription(activeStatus.description);
     activeIntegrationId = activeStatus.integration_id || activeStatus.tool_name;
   } else if (activeStep) {
-    summaryLabel = activeStep.label;
+    summaryLabel = sanitizeProgressDescription(activeStep.label);
     activeIntegrationId = activeStep.integration_id || activeStep.tool_name;
   } else if (isGenerating) {
     summaryLabel = 'Generating response';

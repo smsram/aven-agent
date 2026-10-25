@@ -287,18 +287,228 @@ pub fn is_action_request(prompt: &str) -> bool {
     action_phrases.iter().any(|&k| lower.contains(k))
 }
 
+/// Strictly sanitize user-visible activity descriptions so raw HTML, source code,
+/// internal prompts, serialized payloads, and unrelated file contents cannot appear.
+pub fn sanitize_activity_label(raw: &str) -> String {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return "Analyzing screen".to_string();
+    }
+
+    let lower = trimmed.to_lowercase();
+    if lower.contains("<!doctype")
+        || lower.contains("<html")
+        || lower.contains("<body")
+        || lower.contains("<div")
+        || lower.contains("<svg")
+        || lower.contains("<script")
+        || lower.contains("<style")
+        || lower.contains("<?xml")
+        || (trimmed.starts_with('{') && trimmed.ends_with('}'))
+        || (trimmed.starts_with('[') && trimmed.ends_with(']'))
+    {
+        return "Analyzing screen".to_string();
+    }
+
+    // Strip any HTML angle brackets
+    let mut clean = String::new();
+    let mut in_tag = false;
+    for c in trimmed.chars() {
+        if c == '<' {
+            in_tag = true;
+        } else if c == '>' {
+            in_tag = false;
+        } else if !in_tag {
+            clean.push(c);
+        }
+    }
+
+    let first_line = clean.lines().next().unwrap_or("").trim();
+    if first_line.is_empty() {
+        return "Analyzing screen".to_string();
+    }
+
+    if first_line.len() > 45 {
+        let mut truncated = first_line.chars().take(42).collect::<String>();
+        truncated.push_str("...");
+        truncated
+    } else {
+        first_line.to_string()
+    }
+}
+
 /// Detect if model output indicates future or pending intent rather than task completion
 pub fn indicates_pending_action(text: &str) -> bool {
     let lower = text.to_lowercase();
     let intent_phrases = [
-        "i will now", "now i will", "next, i will", "next i will",
-        "let me now", "i'm going to", "i will proceed", "next step is",
-        "i will type", "i will write", "i will click", "i'll type",
-        "i'll write", "i'll click", "i will focus", "proceeding to",
-        "now typing", "now opening", "about to type", "going to type",
-        "i will then", "then i will", "moving on to",
+        "now i will", "now i'll", "now i am", "now i'm",
+        "i will now", "i'll now", "i am now", "i'm now",
+        "next i will", "next, i will", "next i'll", "next, i'll",
+        "next we will", "next, we will", "next we'll", "next, we'll",
+        "let me now", "let us now", "now let me", "now let's", "let's now",
+        "i will add", "i'll add", "now add ", "now adding",
+        "i will apply", "i'll apply", "now apply ", "now applying",
+        "i will insert", "i'll insert", "now insert ", "now inserting",
+        "i will select", "i'll select", "now select ", "now selecting",
+        "i will click", "i'll click", "now click ", "now clicking",
+        "i will type", "i'll type", "now type ", "now typing",
+        "i will write", "i'll write", "now write ", "now writing",
+        "i will open", "i'll open", "now open ", "now opening",
+        "i will focus", "i'll focus", "now focus ", "now focusing",
+        "i will navigate", "i'll navigate", "now navigate ", "now navigating",
+        "i will proceed", "i'll proceed", "proceeding to",
+        "i will then", "then i will", "then i'll", "moving on to",
+        "about to", "going to add", "going to type", "going to click",
+        "the next step is", "first, i will", "first i will", "first i'll",
+        "next step:", "next step is to",
     ];
     intent_phrases.iter().any(|&p| lower.contains(p))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GateOutcome {
+    AllowCompletion,
+    RequireContinuation {
+        prompt: String,
+        reason: &'static str,
+    },
+}
+
+pub fn map_tool_to_factual_label(tool_name: &str, tool_args: &serde_json::Value) -> String {
+    format_tool_activity_description(tool_name, tool_args, "")
+}
+
+pub fn evaluate_task_completion_gate(
+    user_prompt: &str,
+    executed_tools: &[String],
+    _current_step: usize,
+    _max_steps: usize,
+    turn_text: &str,
+) -> GateOutcome {
+    if !is_action_request(user_prompt) {
+        return GateOutcome::AllowCompletion;
+    }
+
+    // Do NOT automatically allow completion based on arbitrary step counts.
+    // Tasks must continue until their requested outcome is verified with evidence,
+    // or an explicit terminal failure/recovery blocker is identified.
+
+    let lower_prompt = user_prompt.to_lowercase();
+    let _lower_turn = turn_text.to_lowercase();
+
+    // 1. If model explicitly indicates pending or future intent, prompt it to execute immediately
+    if indicates_pending_action(turn_text) {
+        return GateOutcome::RequireContinuation {
+            prompt: "Please proceed immediately with executing the next planned step by calling the required desktop tool directly. Do not stop until all actions are executed.".to_string(),
+            reason: "model_indicated_pending_action",
+        };
+    }
+
+    // 2. Check Launch requirement
+    let wants_launch = lower_prompt.contains("open ")
+        || lower_prompt.contains("launch ")
+        || lower_prompt.contains("start ")
+        || lower_prompt.contains("word")
+        || lower_prompt.contains("winword")
+        || lower_prompt.contains("notepad")
+        || lower_prompt.contains("calculator")
+        || lower_prompt.contains("calc")
+        || lower_prompt.contains("chrome")
+        || lower_prompt.contains("edge")
+        || lower_prompt.contains("explorer");
+    let has_launched = executed_tools.iter().any(|t| t.contains("launch_app"));
+    if wants_launch && !has_launched {
+        let app_hint = if lower_prompt.contains("word") || lower_prompt.contains("winword") {
+            "winword"
+        } else if lower_prompt.contains("notepad") {
+            "notepad"
+        } else if lower_prompt.contains("calc") {
+            "calc"
+        } else if lower_prompt.contains("chrome") {
+            "chrome"
+        } else if lower_prompt.contains("edge") {
+            "msedge"
+        } else if lower_prompt.contains("explorer") {
+            "explorer"
+        } else {
+            "the application"
+        };
+        return GateOutcome::RequireContinuation {
+            prompt: format!("The requested application has not been launched yet. Please call desktop_control_launch_app with app_name: '{app_hint}' now."),
+            reason: "unexecuted_launch",
+        };
+    }
+
+    // 3. Check Typing / Introduction requirement
+    let wants_type = lower_prompt.contains("type ")
+        || lower_prompt.contains("write ")
+        || lower_prompt.contains("type \"")
+        || lower_prompt.contains("type '")
+        || lower_prompt.contains("enter ")
+        || lower_prompt.contains("introduce")
+        || lower_prompt.contains("introduction");
+    let has_typed = executed_tools.iter().any(|t| t.contains("keyboard") || (t.contains("input") && t.contains("type")));
+    if wants_type && !has_typed {
+        return GateOutcome::RequireContinuation {
+            prompt: "The requested text has not been typed yet. Please call desktop_control_keyboard_action with action: 'type_text' to type the requested text into the active target now.".to_string(),
+            reason: "unexecuted_typing",
+        };
+    }
+
+    // 4. Check Document Formatting / Borders requirement
+    let wants_borders = lower_prompt.contains("border")
+        || lower_prompt.contains("borders")
+        || lower_prompt.contains("page border")
+        || lower_prompt.contains("page borders")
+        || lower_prompt.contains("margin")
+        || lower_prompt.contains("watermark");
+    let border_interactions = executed_tools.iter().filter(|t| t.contains("mouse") || t.contains("keyboard") || t.contains("inspect_ui")).count();
+    let has_border_verification = executed_tools.iter().any(|t| t.contains("capture_screenshot") || t.contains("inspect_ui"));
+    if wants_borders && (border_interactions < 3 || !has_border_verification) {
+        return GateOutcome::RequireContinuation {
+            prompt: "The user requested page borders ('make sure the page have borders'). Please navigate to the Design tab or Page Borders control in Word, apply the page border, and capture a screenshot to visually verify that the page border is applied before completing.".to_string(),
+            reason: "unexecuted_borders",
+        };
+    }
+
+    // 5. Check Click / Interaction requirement
+    let wants_click = lower_prompt.contains("click ")
+        || lower_prompt.contains("press ")
+        || lower_prompt.contains("select ")
+        || lower_prompt.contains("choose ");
+    let has_clicked = executed_tools.iter().any(|t| t.contains("mouse"));
+    if wants_click && !has_clicked {
+        return GateOutcome::RequireContinuation {
+            prompt: "The requested click/selection has not been performed yet. Please capture a screenshot with desktop_control_capture_screenshot to locate the control visually, then click it using desktop_control_mouse_action.".to_string(),
+            reason: "unexecuted_click",
+        };
+    }
+
+    // 6. Check Save / Dialog handling requirement
+    let wants_save = lower_prompt.contains("save") || lower_prompt.contains("save as") || lower_prompt.contains("file picker");
+    let interaction_count = executed_tools.iter().filter(|t| !t.contains("capture_screenshot")).count();
+    if wants_save && interaction_count < 2 && !_lower_turn.contains("saved") {
+        return GateOutcome::RequireContinuation {
+            prompt: "The requested save operation requires saving the file or confirming the dialog. Please proceed with triggering Save (e.g. Ctrl+S or clicking Save), entering the filename if needed, and confirming.".to_string(),
+            reason: "unexecuted_save",
+        };
+    }
+
+    // 7. Action-by-action Verification Evidence Gate:
+    // If meaningful desktop actions were executed (e.g. typing or clicking), but no follow-up screenshot
+    // has been captured to verify the resulting screen state and confirm the outcome:
+    let last_tool = executed_tools.last().map(|s| s.as_str()).unwrap_or("");
+    let is_state_altering = last_tool.contains("keyboard") || last_tool.contains("mouse") || last_tool.contains("launch_app");
+    let has_recent_verification = executed_tools.iter().rev().take(2).any(|t| t.contains("capture_screenshot") || t.contains("wait_for_ui"));
+
+    if is_state_altering && !has_recent_verification {
+        return GateOutcome::RequireContinuation {
+            prompt: "Desktop action was executed. Please call desktop_control_capture_screenshot now to observe the screen, verify the outcome with visual evidence, and confirm the task is complete.".to_string(),
+            reason: "unverified_desktop_state",
+        };
+    }
+
+    GateOutcome::AllowCompletion
 }
 
 /// Robust JSON string repair for fragmented, unclosed, or streaming tool call arguments
@@ -904,46 +1114,96 @@ pub fn format_tool_activity_description(
     _display_name: &str,
 ) -> String {
     let lower = tool_name.to_lowercase();
-    if lower.contains("get_screen_info") || lower.contains("capture_screenshot") {
+    let label = if lower.contains("capture_screenshot") {
         "Capturing screen".to_string()
+    } else if lower.contains("get_screen_info") {
+        "Analyzing screen".to_string()
+    } else if lower.contains("file_access") {
+        let action = tool_args.get("action").and_then(|v| v.as_str()).unwrap_or("read");
+        if action == "list" {
+            "Listing directory".to_string()
+        } else {
+            "Reading file".to_string()
+        }
+    } else if lower.contains("system_info") {
+        "Inspecting system".to_string()
+    } else if lower.contains("open_url") {
+        "Opening browser".to_string()
+    } else if lower.contains("launch_app") {
+        let app_name = tool_args
+            .get("app_name")
+            .or_else(|| tool_args.get("app_path"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("application");
+        let safe_app = if app_name.contains("word") || app_name.contains("winword") {
+            "Microsoft Word"
+        } else if app_name.contains("notepad") {
+            "Notepad"
+        } else if app_name.contains("calc") {
+            "Calculator"
+        } else if app_name.contains("edge") {
+            "Microsoft Edge"
+        } else if app_name.contains("chrome") {
+            "Google Chrome"
+        } else if app_name.contains("explorer") {
+            "File Explorer"
+        } else {
+            "application"
+        };
+        format!("Opening {safe_app}")
+    } else if lower.contains("keyboard") {
+        let action = tool_args.get("action").and_then(|v| v.as_str()).unwrap_or("type_text");
+        if action == "type_text" {
+            "Typing".to_string()
+        } else if action == "key_combination" || action == "press_key" {
+            "Typing".to_string()
+        } else {
+            "Typing".to_string()
+        }
+    } else if lower.contains("mouse") {
+        let target_desc = tool_args.get("target_description").and_then(|v| v.as_str());
+        if let Some(desc) = target_desc {
+            let dl = desc.to_lowercase();
+            if dl.contains("design") {
+                "Opening Design tab".to_string()
+            } else if dl.contains("border") {
+                "Applying Page Borders".to_string()
+            } else if dl.contains("save") || dl.contains("picker") || dl.contains("dialog") {
+                "Opening file picker".to_string()
+            } else if dl.contains("file") || dl.contains("item") {
+                "Selecting file".to_string()
+            } else {
+                let sanitized_desc = sanitize_activity_label(desc);
+                if sanitized_desc.len() > 25 {
+                    "Finding target".to_string()
+                } else {
+                    format!("Finding target: {sanitized_desc}")
+                }
+            }
+        } else {
+            "Clicking".to_string()
+        }
+    } else if lower.contains("wait_for_ui") {
+        "Waiting for application".to_string()
     } else if lower.contains("inspect_ui") {
         let action = tool_args.get("action").and_then(|v| v.as_str()).unwrap_or("inspect_window");
         match action {
-            "find_element" | "inspect_window" | "get_focused_control" | "get_focused_element" => "Searching UIA".to_string(),
+            "find_element" | "get_focused_control" | "get_focused_element" => "Searching UIA".to_string(),
             "get_element_bounds" => "Finding target".to_string(),
             "invoke" | "click_element" => "Clicking".to_string(),
             "set_value" => "Typing".to_string(),
             "revalidate_element" | "check_state" => "Verifying result".to_string(),
-            _ => "Analyzing screen".to_string(),
+            _ => "Verifying result".to_string(),
         }
-    } else if lower.contains("mouse_action") {
-        let action = tool_args.get("action").and_then(|v| v.as_str()).unwrap_or("click");
-        match action {
-            "move" => "Finding target".to_string(),
-            "click" | "left_click" => "Clicking".to_string(),
-            "right_click" => "Right-clicking".to_string(),
-            "double_click" => "Double-clicking".to_string(),
-            "drag" | "scroll" => "Acting".to_string(),
-            _ => "Acting".to_string(),
-        }
-    } else if lower.contains("keyboard_action") {
-        let action = tool_args.get("action").and_then(|v| v.as_str()).unwrap_or("type_text");
-        match action {
-            "type_text" => "Typing".to_string(),
-            "get_focused_element" | "get_focused_control" => "Searching UIA".to_string(),
-            _ => "Acting".to_string(),
-        }
-    } else if lower.contains("wait_for_ui") {
-        "Verifying result".to_string()
-    } else if lower.contains("launch_app") {
-        "Launching app".to_string()
     } else if lower.contains("window_action") {
         "Managing window".to_string()
     } else if lower.contains("search") {
         "Searching web".to_string()
     } else {
         "Analyzing screen".to_string()
-    }
+    };
+
+    sanitize_activity_label(&label)
 }
 
 /// Extract user-facing visible text tokens from Cloudflare Workers AI streaming chunk formats.
@@ -1042,13 +1302,14 @@ pub fn extract_token_from_json(val: &serde_json::Value) -> Option<String> {
 }
 
 /// Failure classification for failover decision
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FailureCategory {
     AuthFailure,         // 401/403
+    PermissionOrAccess,  // 404 account/model access, 403 restricted access
     RateLimit,           // 429
-    QuotaExhausted,      // Quota / billing limit reached
+    QuotaExhausted,      // 402, 429 quota exhaustion
     ServerOrNetwork,     // 5xx, timeout, connect err
-    PermanentRequestErr, // 400, 404
+    PermanentRequestErr, // 400 with unrecoverable syntax
 }
 
 /// Parse and validate comma-separated Account IDs and API Keys.
@@ -1056,13 +1317,14 @@ pub enum FailureCategory {
 /// - Trims whitespace around every entry.
 /// - Ignores empty entries caused by leading, trailing, or repeated commas.
 /// - Requires at least one valid credential pair.
-/// - Validates that each Account ID has exactly one corresponding API Key.
-/// - If counts differ, returns a clear validation error without silently pairing unrelated credentials.
+/// - Supports 1 Account ID with multiple API Keys or N Account IDs with N API Keys.
+/// - Deduplicates identical pairs while preserving order.
+/// - Rejects internal whitespace inside individual keys or account IDs.
 pub fn parse_and_validate_pairs(
     account_ids_raw: &str,
     api_keys_raw: &str,
 ) -> Result<Vec<CloudflareCredentialPair>, String> {
-    let accounts: Vec<String> = account_ids_raw
+    let mut accounts: Vec<String> = account_ids_raw
         .split([',', '\n', '\r'])
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
@@ -1078,16 +1340,26 @@ pub fn parse_and_validate_pairs(
         return Err("No credentials provided. Please enter at least one Account ID and API Key.".into());
     }
 
+    if accounts.is_empty() {
+        return Err("At least one Account ID is required.".into());
+    }
+
+    if keys.is_empty() {
+        return Err("At least one API Key is required.".into());
+    }
+
+    // Support single Account ID configured with multiple API Keys
+    if accounts.len() == 1 && keys.len() > 1 {
+        let single_acc = accounts[0].clone();
+        accounts = vec![single_acc; keys.len()];
+    }
+
     if accounts.len() != keys.len() {
         return Err(format!(
             "Mismatched count: {} Account ID(s) provided, but {} API Key(s) provided. Each Account ID must have a matching API Key.",
             accounts.len(),
             keys.len()
         ));
-    }
-
-    if accounts.is_empty() {
-        return Err("At least one valid credential pair is required.".into());
     }
 
     let mut pairs = Vec::with_capacity(accounts.len());
@@ -1099,10 +1371,17 @@ pub fn parse_and_validate_pairs(
                 i + 1
             ));
         }
-        pairs.push(CloudflareCredentialPair {
-            account_id: acc,
-            api_key: key,
-        });
+        // Deduplicate identical pairs while preserving configured order
+        if !pairs.iter().any(|p: &CloudflareCredentialPair| p.account_id == acc && p.api_key == key) {
+            pairs.push(CloudflareCredentialPair {
+                account_id: acc,
+                api_key: key,
+            });
+        }
+    }
+
+    if pairs.is_empty() {
+        return Err("At least one valid credential pair is required.".into());
     }
 
     Ok(pairs)
@@ -1260,6 +1539,7 @@ impl CredentialManager {
 
         let duration = match category {
             FailureCategory::AuthFailure => Duration::from_secs(300), // 5 min cooldown for bad token
+            FailureCategory::PermissionOrAccess => Duration::from_secs(300), // 5 min cooldown for account/model access failure
             FailureCategory::RateLimit => {
                 Duration::from_secs(retry_after_secs.unwrap_or(30).clamp(5, 300))
             }
@@ -1480,10 +1760,13 @@ pub async fn execute_streaming_chat(
 
     let is_time_sensitive = is_time_sensitive_request(&latest_user_prompt);
     let is_action = is_action_request(&latest_user_prompt);
+    let automation_session_id = format!("{}-{}", conversation_id, message_id);
 
     if is_action {
-        crate::plugins::desktop_control::overlay::start_desktop_automation();
-        crate::plugins::desktop_control::overlay::set_activity_text("Analyzing screen");
+        crate::plugins::desktop_control::overlay::start_desktop_automation_session(
+            &automation_session_id,
+            "Analyzing screen",
+        );
     }
 
     // Normalize messages: Cloudflare requires role: "system" strictly at index 0.
@@ -1525,10 +1808,10 @@ pub async fn execute_streaming_chat(
 
 DYNAMIC ACTION METHOD SELECTION HIERARCHY:
 1. Application-Specific API / Native Integration: Use specialized tools (native_file_access, native_system_info) when available.
-2. UIA Semantic Interaction: Prefer targeted UIA (inspect_ui invoke, set_value, select_item) for uniquely identified standard controls (buttons, menus, edits, checkboxes) because semantic invocation is deterministic and immune to coordinate drifts.
-3. Native Keyboard Shortcuts & Unicode Input: For typing, navigation, and standard dialogs (Enter/Esc/Tab), use keyboard_action.
-4. Vision-Based Coordinate Interaction: For custom-rendered controls, canvas interfaces, inaccessible elements, or UIA failures, capture a screenshot and use mouse_action with image coordinates (image_x, image_y).
-5. Visual / OCR Verification: When text or state must be confirmed visually and UIA is unavailable or stale, inspect screenshot crops.
+2. Screenshot & AI Vision-First Element Identification (DEFAULT): Always inspect the visual screenshot to locate buttons, inputs, file pickers, and menus. Supply `image_x` and `image_y` with screenshot metadata to `desktop_control_mouse_action` for automatic virtual desktop coordinate transformation. Reject out-of-bounds or implausible coordinates.
+3. Native Keyboard Shortcuts & Unicode Input: For typing text into focused fields or standard dialog shortcuts (Ctrl+S, Enter, Esc), use `keyboard_action`.
+4. Targeted UIA as On-Demand Fallback & Property Verification: Use UIA (`inspect_ui`) only for specific semantic properties (`read_text`, `check_state`, `get_focused_control`) or when visual identification is ambiguous. Never default to broad recursive UIA tree searches or override a visually identified target.
+5. Visual Evidence Verification: After meaningful actions, capture a fresh screenshot with `desktop_control_capture_screenshot` to verify that the expected state change occurred before marking the task complete.
 Fall back dynamically between methods when appropriate, always verifying the latest screen state.
 
 OPERATING PRINCIPLES:
@@ -1549,7 +1832,13 @@ OPERATING PRINCIPLES:
 5. Bounded Recovery & Honest Reporting:
    - When verification fails: diagnose the failure (e.g. window lost focus, target read-only, control missed) using fresh observation, gather targeted UIA if helpful, and attempt a different justified strategy.
    - Do NOT repeat the exact same failed action blindly. Bounded recovery allows a maximum of 2 retry attempts per failed action.
-   - Accurately report outcomes: successful (supported by verified evidence), failed (explained with blockers), unverified (outcome uncertain), partially completed, or cancelled."
+   - Accurately report outcomes: successful (supported by verified evidence), failed (explained with blockers), unverified (outcome uncertain), partially completed, or cancelled.
+6. Shortest Reliable Path & Direct Targeting:
+   - Identify the shortest direct sequence of actions to accomplish the goal based on the current screenshot.
+   - Prefer direct, visible ribbon tabs, buttons, and dialog controls over multi-step menus or indirect search sequences.
+   - In Microsoft Word: to add page borders, click directly on the 'Design' tab on the top ribbon, then click the 'Page Borders' button in the 'Page Background' group on the far right, select 'Box' (or desired border) in the 'Borders and Shading' dialog, click 'OK', and capture a screenshot to visually verify the border.
+   - Do not wander into backstage menus (File -> Options) or unrelated tabs when direct visible controls exist.
+   - If an action or shortcut is unambiguous and reliable (e.g. Enter to accept a dialog, Ctrl+A to select all), use it directly."
     );
 
     if is_vision {
@@ -1668,11 +1957,17 @@ OPERATING PRINCIPLES:
     let mut action_failure_counts: HashMap<String, usize> = HashMap::new();
 
     let mut current_step: usize = 0;
-    const MAX_TOOL_STEPS: usize = 15;
     let mut automation_metrics = AutomationMetrics::default();
     let mut diagnostics_history: Vec<StructuredDiagnostic> = Vec::new();
+    let mut consecutive_unproductive_iterations: usize = 0;
 
-    while current_step < MAX_TOOL_STEPS {
+    // Continue while the task has pending work and is making progress.
+    // Arbitrary total iteration caps are removed in favor of evidence-based safeguards:
+    // - User/hotkey cancellation
+    // - Verification failure bounded retries (max 2 per subtask)
+    // - Consecutive unproductive iteration detection
+    // - Provider limits and token budget compaction
+    while !cancel_token.load(Ordering::SeqCst) && !crate::plugins::desktop_control::hotkey::is_cancelled() {
         current_step += 1;
         let mut turn_succeeded = false;
         let mut turn_accumulated_tool = AccumulatedToolCall::default();
@@ -1680,10 +1975,35 @@ OPERATING PRINCIPLES:
         let mut turn_finish_reason: Option<String> = None;
         let mut fallback_prompt_converted = false;
 
-        for &idx in &candidates {
+        let turn_candidates = {
+            let mgr = state.manager.lock().await;
+            mgr.get_candidate_indices()
+        };
+
+        if turn_candidates.is_empty() {
+            let combined_err = "No Cloudflare credentials configured. Open Settings → API to configure Account ID and API Key.".to_string();
+            all_errors.push(combined_err);
+            break;
+        }
+
+        let mut attempted_in_turn = std::collections::HashSet::new();
+
+        for &idx in &turn_candidates {
+            if attempted_in_turn.contains(&idx) {
+                continue;
+            }
+            attempted_in_turn.insert(idx);
             if cancel_token.load(Ordering::SeqCst) || crate::plugins::desktop_control::hotkey::is_cancelled() {
-                crate::plugins::desktop_control::overlay::clear_activity_text();
-                crate::plugins::desktop_control::overlay::hide_overlay();
+                if is_action {
+                    crate::plugins::desktop_control::overlay::end_desktop_automation_session(
+                        &automation_session_id,
+                        crate::plugins::desktop_control::overlay::AutomationSessionState::Cancelled,
+                        "Cancelled",
+                    );
+                } else {
+                    crate::plugins::desktop_control::overlay::clear_activity_text();
+                    crate::plugins::desktop_control::overlay::hide_overlay();
+                }
                 crate::plugins::desktop_control::input::release_all_input_locks();
                 let _ = app.emit(
                     "chat-activity-status",
@@ -1762,8 +2082,8 @@ OPERATING PRINCIPLES:
                 serde_json::json!(temperature.unwrap_or(0.2)),
             );
 
-            // Supply tool definitions only if within tool invocation allowance
-            if !tools_list.is_empty() && current_step < MAX_TOOL_STEPS {
+            // Supply tool definitions whenever tools are available
+            if !tools_list.is_empty() {
                 req_body_map.insert(
                     "tools".to_string(),
                     serde_json::Value::Array(tools_list.clone()),
@@ -1771,6 +2091,13 @@ OPERATING PRINCIPLES:
             }
 
             let req_body = serde_json::Value::Object(req_body_map);
+
+            if is_action {
+                crate::plugins::desktop_control::cursor::touch_task_heartbeat(
+                    &automation_session_id,
+                    crate::plugins::desktop_control::overlay::AutomationSessionState::WaitingForModel,
+                );
+            }
 
             let send_timeout = tokio::time::timeout(
                 Duration::from_secs(45),
@@ -1964,9 +2291,13 @@ OPERATING PRINCIPLES:
                         FailureCategory::AuthFailure,
                         format!("Pair #{} ({}): HTTP 403 Forbidden (Check Workers AI permissions)", idx + 1, masked),
                     ),
+                    402 => (
+                        FailureCategory::QuotaExhausted,
+                        format!("Pair #{} ({}): HTTP 402 Payment Required (Account quota exhausted)", idx + 1, masked),
+                    ),
                     404 => (
-                        FailureCategory::PermanentRequestErr,
-                        format!("Model '{}' not found or invalid account (HTTP 404).", target_model),
+                        FailureCategory::PermissionOrAccess,
+                        format!("Pair #{} ({}): HTTP 404 Not Found (Invalid account or model '{}' unavailable)", idx + 1, masked, target_model),
                     ),
                     429 => (
                         FailureCategory::RateLimit,
@@ -1982,8 +2313,12 @@ OPERATING PRINCIPLES:
                     ),
                 };
 
-                let mut mgr = state.manager.lock().await;
-                mgr.mark_failure(idx, cat, retry_after);
+                {
+                    let mut mgr = state.manager.lock().await;
+                    mgr.mark_failure(idx, cat, retry_after);
+                }
+
+                all_errors.push(err_msg.clone());
 
                 if cat == FailureCategory::PermanentRequestErr {
                     crate::plugins::desktop_control::overlay::clear_activity_text();
@@ -2015,7 +2350,6 @@ OPERATING PRINCIPLES:
                     return;
                 }
 
-                all_errors.push(err_msg);
                 continue;
             }
 
@@ -2102,6 +2436,7 @@ OPERATING PRINCIPLES:
 
                 let text_chunk = String::from_utf8_lossy(&bytes);
                 buffer.push_str(&text_chunk);
+                crate::plugins::desktop_control::cursor::touch_activity();
 
                 while let Some(pos) = buffer.find('\n') {
                     let line = buffer[..pos].trim().to_string();
@@ -2133,14 +2468,21 @@ OPERATING PRINCIPLES:
                             // If reasoning content arrives, report thinking activity status without user-facing text leakage
                             if let Some(reasoning) = extract_reasoning_from_json(&parsed) {
                                 if !reasoning.is_empty() {
-                                    crate::plugins::desktop_control::overlay::set_activity_text("Analyzing screen");
+                                    let reasoning_label = if executed_tools.last().map(|t| t.contains("capture_screenshot")).unwrap_or(false) {
+                                        "Analyzing screen"
+                                    } else if executed_tools.last().map(|t| t.contains("inspect_ui")).unwrap_or(false) {
+                                        "Verifying result"
+                                    } else {
+                                        "Planning next action"
+                                    };
+                                    crate::plugins::desktop_control::overlay::set_activity_text(reasoning_label);
                                     let _ = app.emit(
                                         "chat-activity-status",
                                         ChatActivityStatusPayload {
                                             conversation_id: conversation_id.clone(),
                                             message_id: message_id.clone(),
-                                            status: "analyzing".to_string(),
-                                            description: "Analyzing screen".to_string(),
+                                            status: if reasoning_label == "Analyzing screen" { "analyzing".to_string() } else { "running".to_string() },
+                                            description: reasoning_label.to_string(),
                                             integration_id: None,
                                             tool_name: None,
                                         },
@@ -2160,6 +2502,35 @@ OPERATING PRINCIPLES:
                                     if !is_tool_token {
                                         visible_tokens_emitted += 1;
                                         full_text.push_str(&token);
+
+                                        // If the assistant announces its next action in conversational speech, update status immediately
+                                        if indicates_pending_action(&turn_text) {
+                                            let lower_intent = turn_text.to_lowercase();
+                                            let action_desc = if lower_intent.contains("border") {
+                                                "Applying Page Borders"
+                                            } else if lower_intent.contains("design") {
+                                                "Opening Design tab"
+                                            } else if lower_intent.contains("word") || lower_intent.contains("winword") {
+                                                "Opening Microsoft Word"
+                                            } else if lower_intent.contains("introduce") || lower_intent.contains("introduction") {
+                                                "Entering introduction"
+                                            } else if lower_intent.contains("save") {
+                                                "Saving document"
+                                            } else {
+                                                "Executing next step"
+                                            };
+                                            crate::plugins::desktop_control::overlay::set_activity_text(action_desc);
+                                            if is_action {
+                                                crate::plugins::desktop_control::overlay::update_automation_session(
+                                                    &automation_session_id,
+                                                    crate::plugins::desktop_control::overlay::AutomationSessionState::Running,
+                                                    action_desc,
+                                                    None,
+                                                    None,
+                                                );
+                                            }
+                                        }
+
                                         let _ = app.emit(
                                             "chat-stream-chunk",
                                             StreamChunkPayload {
@@ -2273,7 +2644,21 @@ OPERATING PRINCIPLES:
             let display_name = resolved.map(|c| c.name.as_str()).unwrap_or(&tool_name);
             let activity_desc = format_tool_activity_description(&tool_name, &tool_args, display_name);
 
-            crate::plugins::desktop_control::overlay::set_activity_text(&activity_desc);
+            if is_action {
+                crate::plugins::desktop_control::cursor::touch_task_heartbeat(
+                    &automation_session_id,
+                    crate::plugins::desktop_control::overlay::AutomationSessionState::ExecutingTool,
+                );
+                crate::plugins::desktop_control::overlay::update_automation_session(
+                    &automation_session_id,
+                    crate::plugins::desktop_control::overlay::AutomationSessionState::ExecutingTool,
+                    &activity_desc,
+                    None,
+                    None,
+                );
+            } else {
+                crate::plugins::desktop_control::overlay::set_activity_text(&activity_desc);
+            }
 
             let _ = app.emit(
                 "chat-activity-status",
@@ -2324,7 +2709,14 @@ OPERATING PRINCIPLES:
                 || tool_name.starts_with("desktop_control_");
 
             if is_desktop_tool {
-                crate::plugins::desktop_control::overlay::start_desktop_automation();
+                let factual_label = map_tool_to_factual_label(&tool_name, &tool_args);
+                crate::plugins::desktop_control::overlay::update_automation_session(
+                    &automation_session_id,
+                    crate::plugins::desktop_control::overlay::AutomationSessionState::ExecutingTool,
+                    &factual_label,
+                    Some(tool_name.clone()),
+                    tool_args.get("target_description").and_then(|v| v.as_str()).map(|s| s.to_string()),
+                );
                 if let Some(x) = tool_args.get("x").and_then(|v| v.as_i64()) {
                     if let Some(y) = tool_args.get("y").and_then(|v| v.as_i64()) {
                         crate::plugins::desktop_control::overlay::update_target_position(x as i32, y as i32);
@@ -2400,7 +2792,21 @@ OPERATING PRINCIPLES:
             if is_verification_failed {
                 automation_metrics.verification_failure_count += 1;
                 automation_metrics.retry_count += 1;
-                crate::plugins::desktop_control::overlay::set_activity_text("Recovering");
+                if is_action {
+                    crate::plugins::desktop_control::cursor::touch_task_heartbeat(
+                        &automation_session_id,
+                        crate::plugins::desktop_control::overlay::AutomationSessionState::Recovering,
+                    );
+                    crate::plugins::desktop_control::overlay::update_automation_session(
+                        &automation_session_id,
+                        crate::plugins::desktop_control::overlay::AutomationSessionState::Recovering,
+                        "Recovering",
+                        Some("Action verification failed".to_string()),
+                        None,
+                    );
+                } else {
+                    crate::plugins::desktop_control::overlay::set_activity_text("Recovering");
+                }
                 let _ = app.emit(
                     "chat-activity-status",
                     ChatActivityStatusPayload {
@@ -2424,6 +2830,12 @@ OPERATING PRINCIPLES:
                 });
             } else {
                 automation_metrics.verification_success_count += 1;
+                if is_action {
+                    crate::plugins::desktop_control::cursor::touch_task_heartbeat(
+                        &automation_session_id,
+                        crate::plugins::desktop_control::overlay::AutomationSessionState::Verifying,
+                    );
+                }
                 diagnostics_history.push(StructuredDiagnostic {
                     step: current_step,
                     selected_method: interaction_method.clone(),
@@ -2487,6 +2899,8 @@ OPERATING PRINCIPLES:
             if is_vision && screenshot_image_base64.is_some() {
                 let b64 = screenshot_image_base64.unwrap();
                 let title = screenshot_info_obj.get("window_title").and_then(|v| v.as_str()).unwrap_or("Desktop");
+                let is_dialog = screenshot_info_obj.get("is_dialog").and_then(|v| v.as_bool()).unwrap_or(false);
+                let fg_proc = screenshot_info_obj.get("foreground_process").and_then(|v| v.as_str()).unwrap_or("");
                 let w = screenshot_info_obj.get("width").and_then(|v| v.as_u64()).unwrap_or(0);
                 let h = screenshot_info_obj.get("height").and_then(|v| v.as_u64()).unwrap_or(0);
                 let scale_x = screenshot_info_obj.get("scale_x").and_then(|v| v.as_f64()).unwrap_or(1.0);
@@ -2495,9 +2909,15 @@ OPERATING PRINCIPLES:
                 let orig_y = screenshot_info_obj.get("desktop_origin_y").and_then(|v| v.as_i64()).unwrap_or(0);
                 let dpi = screenshot_info_obj.get("dpi_scale").and_then(|v| v.as_f64()).unwrap_or(1.0);
 
+                let dialog_hint = if is_dialog {
+                    format!("\n[Active Native Dialog Detected - {}]: A native dialog or window ({}) is currently active. Visually inspect its controls (buttons, filename input field, file lists) and interact with it directly.", title, fg_proc)
+                } else {
+                    String::new()
+                };
+
                 let visual_prompt = format!(
-                    "[Visual Desktop Screenshot - {}]: {}x{} (scale: {:.2}x{:.2}, origin: [{}, {}], DPI: {:.2}). Visually inspect the layout and controls. When clicking, provide image coordinates (image_x, image_y) or desktop coordinates (x, y).",
-                    title, w, h, scale_x, scale_y, orig_x, orig_y, dpi
+                    "[Visual Desktop Screenshot - {}]: {}x{} (scale: {:.2}x{:.2}, origin: [{}, {}], DPI: {:.2}). Visually inspect the layout and controls. When clicking, provide image coordinates (image_x, image_y) or desktop coordinates (x, y).{}",
+                    title, w, h, scale_x, scale_y, orig_x, orig_y, dpi, dialog_hint
                 );
 
                 effective_messages.push(ChatMessage::new_multimodal(
@@ -2508,19 +2928,39 @@ OPERATING PRINCIPLES:
                 ));
             }
 
-            crate::plugins::desktop_control::overlay::set_activity_text("Analyzing screen");
+            let next_label = if tool_name.contains("capture_screenshot") {
+                "Analyzing screen"
+            } else if tool_name.contains("inspect_ui") {
+                "Verifying result"
+            } else {
+                "Planning next action"
+            };
+
+            if is_action {
+                crate::plugins::desktop_control::overlay::update_automation_session(
+                    &automation_session_id,
+                    crate::plugins::desktop_control::overlay::AutomationSessionState::WaitingForModel,
+                    next_label,
+                    None,
+                    None,
+                );
+            } else {
+                crate::plugins::desktop_control::overlay::set_activity_text(next_label);
+            }
+
             let _ = app.emit(
                 "chat-activity-status",
                 ChatActivityStatusPayload {
                     conversation_id: conversation_id.clone(),
                     message_id: message_id.clone(),
-                    status: "analyzing".to_string(),
-                    description: "Analyzing screen".to_string(),
+                    status: if next_label == "Analyzing screen" { "analyzing".to_string() } else { "running".to_string() },
+                    description: next_label.to_string(),
                     integration_id: resolved.map(|c| c.source_id.clone()),
                     tool_name: Some(tool_name.clone()),
                 },
             );
 
+            consecutive_unproductive_iterations = 0;
             // Continue loop to synthesize follow-up model response or execute next tool step
             continue;
         }
@@ -2555,31 +2995,72 @@ OPERATING PRINCIPLES:
             continue;
         }
 
-        // 2. Multi-step execution continuation:
-        // If the model emitted intermediate text promising next steps or if a multi-action task is partially completed:
-        if current_step < MAX_TOOL_STEPS && is_action_request(&latest_user_prompt) {
-            let lower_turn = turn_text.to_lowercase();
-            let has_pending_intent = indicates_pending_action(&turn_text);
-            let app_launched = executed_tools.iter().any(|t| t.contains("launch_app"));
-            let interaction_done = executed_tools.iter().any(|t| t.contains("keyboard") || t.contains("mouse") || t.contains("inspect_ui"));
-            let user_wants_interaction = latest_user_prompt.to_lowercase().contains("type")
-                || latest_user_prompt.to_lowercase().contains("write")
-                || latest_user_prompt.to_lowercase().contains("send")
-                || latest_user_prompt.to_lowercase().contains("click");
+        // 2. Multi-step execution continuation & Action-by-action completion gate:
+        if is_action {
+            let gate_outcome = evaluate_task_completion_gate(
+                &latest_user_prompt,
+                &executed_tools,
+                current_step,
+                0,
+                &turn_text,
+            );
 
-            if has_pending_intent || (app_launched && user_wants_interaction && !interaction_done && !lower_turn.contains("completed") && !lower_turn.contains("finished")) {
-                effective_messages.push(ChatMessage::new_text("assistant", turn_text.clone()));
-                effective_messages.push(ChatMessage::new_text(
-                    "user",
-                    "Please proceed with the next step now by calling the appropriate tool directly (e.g. desktop_control_keyboard_action with the target window_id). Do not stop until all requested actions are executed.",
-                ));
+            match gate_outcome {
+                GateOutcome::RequireContinuation { prompt, reason } => {
+                    let is_verifying = reason == "unverified_desktop_state";
+                    let cont_label = if is_verifying {
+                        "Verifying result"
+                    } else if reason == "unexecuted_borders" {
+                        "Applying Page Borders"
+                    } else if reason == "unexecuted_typing" {
+                        "Entering introduction"
+                    } else if reason == "unexecuted_launch" {
+                        "Opening application"
+                    } else {
+                        "Executing task"
+                    };
+                    crate::plugins::desktop_control::overlay::update_automation_session(
+                        &automation_session_id,
+                        if is_verifying {
+                            crate::plugins::desktop_control::overlay::AutomationSessionState::Verifying
+                        } else {
+                            crate::plugins::desktop_control::overlay::AutomationSessionState::Running
+                        },
+                        cont_label,
+                        Some(reason.to_string()),
+                        None,
+                    );
 
-                continue;
+                    let clean_assistant_turn = strip_reasoning_from_text(&strip_tool_calls_from_text(&turn_text));
+                    let asst_text = if clean_assistant_turn.trim().is_empty() {
+                        "Executing task step...".to_string()
+                    } else {
+                        clean_assistant_turn
+                    };
+                    effective_messages.push(ChatMessage::new_text("assistant", asst_text));
+                    effective_messages.push(ChatMessage::new_text("user", prompt));
+
+                    if !turn_accumulated_tool.is_valid() {
+                        consecutive_unproductive_iterations += 1;
+                        if consecutive_unproductive_iterations >= 6 {
+                            stream_interrupted = true;
+                            all_errors.push("Task paused: multiple consecutive iterations yielded no desktop action or tool invocation.".to_string());
+                            break;
+                        }
+                    } else {
+                        consecutive_unproductive_iterations = 0;
+                    }
+
+                    continue;
+                }
+                GateOutcome::AllowCompletion => {
+                    // All sub-goals executed and outcome verified!
+                }
             }
         }
 
         // 3. Truncated completion recovery:
-        if turn_finish_reason.as_deref() == Some("length") && current_step < MAX_TOOL_STEPS {
+        if turn_finish_reason.as_deref() == Some("length") {
             effective_messages.push(ChatMessage::new_text("assistant", turn_text.clone()));
             effective_messages.push(ChatMessage::new_text(
                 "user",
@@ -2639,8 +3120,26 @@ OPERATING PRINCIPLES:
         break;
     }
 
-    crate::plugins::desktop_control::overlay::clear_activity_text();
-    crate::plugins::desktop_control::overlay::hide_overlay();
+    if is_action {
+        let final_state = if stream_interrupted || (full_text.is_empty() && !all_errors.is_empty()) {
+            crate::plugins::desktop_control::overlay::AutomationSessionState::Failed
+        } else {
+            crate::plugins::desktop_control::overlay::AutomationSessionState::Completed
+        };
+        let final_label = if final_state == crate::plugins::desktop_control::overlay::AutomationSessionState::Completed {
+            "Completed"
+        } else {
+            "Failed"
+        };
+        crate::plugins::desktop_control::overlay::end_desktop_automation_session(
+            &automation_session_id,
+            final_state,
+            final_label,
+        );
+    } else {
+        crate::plugins::desktop_control::overlay::clear_activity_text();
+        crate::plugins::desktop_control::overlay::hide_overlay();
+    }
     let final_status_label = if stream_interrupted || (full_text.is_empty() && !all_errors.is_empty()) {
         "failed"
     } else {
@@ -2934,6 +3433,89 @@ mod tests {
     }
 
     #[test]
+    fn test_single_account_multiple_api_keys_pairing() {
+        let accs = "shared_account_id_123456789";
+        let keys = "key_alpha, key_beta, key_gamma";
+        let res = parse_and_validate_pairs(accs, keys).unwrap();
+        assert_eq!(res.len(), 3);
+        assert_eq!(res[0].account_id, "shared_account_id_123456789");
+        assert_eq!(res[0].api_key, "key_alpha");
+        assert_eq!(res[1].account_id, "shared_account_id_123456789");
+        assert_eq!(res[1].api_key, "key_beta");
+        assert_eq!(res[2].account_id, "shared_account_id_123456789");
+        assert_eq!(res[2].api_key, "key_gamma");
+    }
+
+    #[test]
+    fn test_parse_and_validate_pairs_deduplication() {
+        let accs = "acc_1, acc_1, acc_2";
+        let keys = "key_1, key_1, key_2";
+        let res = parse_and_validate_pairs(accs, keys).unwrap();
+        // Duplicate pair (acc_1, key_1) must be deduplicated
+        assert_eq!(res.len(), 2);
+        assert_eq!(res[0].account_id, "acc_1");
+        assert_eq!(res[0].api_key, "key_1");
+        assert_eq!(res[1].account_id, "acc_2");
+        assert_eq!(res[1].api_key, "key_2");
+    }
+
+    #[test]
+    fn test_failover_cooldown_and_candidate_exhaustion() {
+        let pairs = vec![
+            CloudflareCredentialPair { account_id: "acc_1".into(), api_key: "key_1".into() },
+            CloudflareCredentialPair { account_id: "acc_2".into(), api_key: "key_2".into() },
+            CloudflareCredentialPair { account_id: "acc_3".into(), api_key: "key_3".into() },
+        ];
+        let mut mgr = CredentialManager::new(pairs);
+
+        // Turn 1: Initial candidate order
+        let c1 = mgr.get_candidate_indices();
+        assert_eq!(c1, vec![0, 1, 2]);
+
+        // Key 0 encounters PermissionOrAccess (e.g. 404 model access error)
+        mgr.mark_failure(0, FailureCategory::PermissionOrAccess, None);
+        let c2 = mgr.get_candidate_indices();
+        assert_eq!(c2, vec![1, 2, 0]); // Key 1 & 2 are prioritized, 0 is cooled down
+
+        // Key 1 encounters QuotaExhausted (e.g. 402 quota error)
+        mgr.mark_failure(1, FailureCategory::QuotaExhausted, None);
+        let c3 = mgr.get_candidate_indices();
+        assert_eq!(c3, vec![2, 0, 1]); // Key 2 is remaining fresh candidate
+
+        // Key 2 succeeds!
+        mgr.mark_success(2);
+        assert_eq!(mgr.preferred_index, 2);
+
+        // Subsequent turn prioritizes preferred successful Key 2
+        let c4 = mgr.get_candidate_indices();
+        assert_eq!(c4[0], 2);
+    }
+
+    #[test]
+    fn test_keys_never_exposed_in_masked_output() {
+        let raw_secret_key = "cf_super_secret_api_key_123456789";
+        let raw_account_id = "cf_secret_account_8899aabbccdd";
+        let pairs = vec![
+            CloudflareCredentialPair {
+                account_id: raw_account_id.into(),
+                api_key: raw_secret_key.into(),
+            },
+        ];
+        let mgr = CredentialManager::new(pairs);
+        let meta = mgr.get_metadata();
+        assert_eq!(meta.len(), 1);
+
+        // Account ID is masked, and secret API key is never in metadata
+        assert!(!meta[0].account_id_masked.contains("secret_account_8899"));
+        assert!(meta[0].account_id_masked.contains("..."));
+
+        // Serialized metadata sent across IPC must never leak secret API key or full account
+        let serialized = serde_json::to_string(&meta).unwrap();
+        assert!(!serialized.contains(raw_secret_key));
+        assert!(!serialized.contains("secret_account_8899"));
+    }
+
+    #[test]
     fn test_format_tool_activity_description_concise_states() {
         let args_find = serde_json::json!({ "action": "find_element", "query": "Save Button" });
         assert_eq!(format_tool_activity_description("desktop_control_inspect_ui", &args_find, "Inspect UI"), "Searching UIA");
@@ -2951,7 +3533,7 @@ mod tests {
         assert_eq!(format_tool_activity_description("desktop_control_capture_screenshot", &args_screen, "Capture Screenshot"), "Capturing screen");
 
         let args_wait = serde_json::json!({ "condition": "window_opened" });
-        assert_eq!(format_tool_activity_description("desktop_control_wait_for_ui", &args_wait, "Wait For UI"), "Verifying result");
+        assert_eq!(format_tool_activity_description("desktop_control_wait_for_ui", &args_wait, "Wait For UI"), "Waiting for application");
     }
 
     #[test]
@@ -3128,6 +3710,10 @@ mod tests {
         assert!(indicates_pending_action("Notepad is open. Next, I will type Hello into the window."));
         assert!(indicates_pending_action("I will now focus the application."));
         assert!(indicates_pending_action("Proceeding to click the submit button."));
+        assert!(indicates_pending_action("Now I'll add page borders via the Design tab."));
+        assert!(indicates_pending_action("I'll now add the borders."));
+        assert!(indicates_pending_action("Now let's apply the page border."));
+        assert!(indicates_pending_action("Now I'm going to format the document."));
         assert!(!indicates_pending_action("I have typed Hello into Notepad. The task is completed."));
         assert!(!indicates_pending_action("The current time in Tokyo is 10:30 AM."));
     }
@@ -3349,6 +3935,195 @@ mod tests {
         // Text-only models
         assert!(!is_vision_model("@cf/google/gemma-4-26b-a4b-it"));
         assert!(!is_vision_model("@cf/qwen/qwen3.8-27b"));
+    }
+
+    #[test]
+    fn test_evaluate_task_completion_gate_prevents_premature_termination() {
+        let prompt = "Open Notepad and type 'Aven Desktop Agent'";
+
+        // Step 1: Nothing executed yet -> must require launch
+        let outcome1 = evaluate_task_completion_gate(prompt, &[], 1, 25, "I will help you open Notepad.");
+        assert_eq!(outcome1, GateOutcome::RequireContinuation {
+            prompt: "The requested application has not been launched yet. Please call desktop_control_launch_app with app_name: 'notepad' now.".to_string(),
+            reason: "unexecuted_launch",
+        });
+
+        // Step 2: App launched, but text not typed yet -> must require typing
+        let tools2 = vec!["desktop_control_launch_app".to_string()];
+        let outcome2 = evaluate_task_completion_gate(prompt, &tools2, 2, 25, "Notepad is open.");
+        assert_eq!(outcome2, GateOutcome::RequireContinuation {
+            prompt: "The requested text has not been typed yet. Please call desktop_control_keyboard_action with action: 'type_text' to type the requested text into the active target now.".to_string(),
+            reason: "unexecuted_typing",
+        });
+
+        // Step 3: Text typed, but no screenshot verification -> must require screenshot verification
+        let tools3 = vec![
+            "desktop_control_launch_app".to_string(),
+            "desktop_control_keyboard_action".to_string(),
+        ];
+        let outcome3 = evaluate_task_completion_gate(prompt, &tools3, 3, 25, "I have typed the text.");
+        assert_eq!(outcome3, GateOutcome::RequireContinuation {
+            prompt: "Desktop action was executed. Please call desktop_control_capture_screenshot now to observe the screen, verify the outcome with visual evidence, and confirm the task is complete.".to_string(),
+            reason: "unverified_desktop_state",
+        });
+
+        // Step 4: Verification screenshot taken -> outcome confirmed -> allow completion!
+        let tools4 = vec![
+            "desktop_control_launch_app".to_string(),
+            "desktop_control_keyboard_action".to_string(),
+            "desktop_control_capture_screenshot".to_string(),
+        ];
+        let outcome4 = evaluate_task_completion_gate(prompt, &tools4, 4, 25, "I confirmed 'Aven Desktop Agent' is typed in Notepad.");
+        assert_eq!(outcome4, GateOutcome::AllowCompletion);
+    }
+
+    #[test]
+    fn test_evaluate_task_completion_gate_non_action_allows_completion() {
+        let prompt = "What is the capital of Italy?";
+        let outcome = evaluate_task_completion_gate(prompt, &[], 1, 25, "The capital of Italy is Rome.");
+        assert_eq!(outcome, GateOutcome::AllowCompletion);
+    }
+
+    #[test]
+    fn test_evaluate_task_completion_gate_pending_intent_forces_continuation() {
+        let prompt = "Click on the Save button";
+        let tools = vec!["desktop_control_capture_screenshot".to_string()];
+        let outcome = evaluate_task_completion_gate(prompt, &tools, 2, 25, "I will now click on the Save button.");
+        assert_eq!(outcome, GateOutcome::RequireContinuation {
+            prompt: "Please proceed immediately with executing the next planned step by calling the required desktop tool directly. Do not stop until all actions are executed.".to_string(),
+            reason: "model_indicated_pending_action",
+        });
+    }
+
+    #[test]
+    fn test_map_tool_to_factual_label() {
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_capture_screenshot", &serde_json::json!({})),
+            "Capturing screen"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_launch_app", &serde_json::json!({ "app_name": "notepad" })),
+            "Opening Notepad"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_launch_app", &serde_json::json!({ "app_name": "winword" })),
+            "Opening Microsoft Word"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_keyboard_action", &serde_json::json!({ "action": "type_text" })),
+            "Typing"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_mouse_action", &serde_json::json!({ "target_description": "Save file dialog button" })),
+            "Opening file picker"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_mouse_action", &serde_json::json!({ "target_description": "report.pdf file item" })),
+            "Selecting file"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_mouse_action", &serde_json::json!({ "target_description": "Design tab" })),
+            "Opening Design tab"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_mouse_action", &serde_json::json!({ "target_description": "Page Borders button" })),
+            "Applying Page Borders"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_wait_for_ui", &serde_json::json!({})),
+            "Waiting for application"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("desktop_control_inspect_ui", &serde_json::json!({})),
+            "Verifying result"
+        );
+        assert_eq!(
+            map_tool_to_factual_label("native_file_access", &serde_json::json!({ "action": "read", "path": "public/index.html" })),
+            "Reading file"
+        );
+    }
+
+    #[test]
+    fn test_sanitize_activity_label_prevents_raw_html_and_payload_leaks() {
+        // Raw HTML or DOCTYPE must never leak as an activity label
+        assert_eq!(
+            sanitize_activity_label("<!DOCTYPE html><html><head><title>Aven Logo</title></head></html>"),
+            "Analyzing screen"
+        );
+        assert_eq!(
+            sanitize_activity_label("<div class=\"content\">Some file text</div>"),
+            "Analyzing screen"
+        );
+        assert_eq!(
+            sanitize_activity_label("{\"status\":\"ok\",\"content\":\"very long json payload\"}"),
+            "Analyzing screen"
+        );
+
+        // Clean action descriptions must be preserved
+        assert_eq!(sanitize_activity_label("Opening Microsoft Word"), "Opening Microsoft Word");
+        assert_eq!(sanitize_activity_label("Applying Page Borders"), "Applying Page Borders");
+        assert_eq!(sanitize_activity_label("Typing self-introduction"), "Typing self-introduction");
+    }
+
+    #[test]
+    fn test_word_task_completion_gate_requires_borders_and_verification() {
+        let prompt = "Open Word and introduce yourself and make sure the page have borders.";
+
+        // Step 1: Nothing executed yet -> must require launch
+        let outcome1 = evaluate_task_completion_gate(prompt, &[], 1, 25, "I will help you with Word.");
+        assert_eq!(outcome1, GateOutcome::RequireContinuation {
+            prompt: "The requested application has not been launched yet. Please call desktop_control_launch_app with app_name: 'winword' now.".to_string(),
+            reason: "unexecuted_launch",
+        });
+
+        // Step 2: App launched, introduction not typed yet -> must require typing
+        let tools2 = vec!["desktop_control_launch_app".to_string()];
+        let outcome2 = evaluate_task_completion_gate(prompt, &tools2, 2, 25, "Word is now open.");
+        assert_eq!(outcome2, GateOutcome::RequireContinuation {
+            prompt: "The requested text has not been typed yet. Please call desktop_control_keyboard_action with action: 'type_text' to type the requested text into the active target now.".to_string(),
+            reason: "unexecuted_typing",
+        });
+
+        // Step 3: Word launched and text typed, model announces border intention -> must require continuation
+        let tools3 = vec![
+            "desktop_control_launch_app".to_string(),
+            "desktop_control_keyboard_action".to_string(),
+        ];
+        let outcome3 = evaluate_task_completion_gate(prompt, &tools3, 3, 25, "Now I'll add page borders via the Design tab.");
+        assert_eq!(outcome3, GateOutcome::RequireContinuation {
+            prompt: "Please proceed immediately with executing the next planned step by calling the required desktop tool directly. Do not stop until all actions are executed.".to_string(),
+            reason: "model_indicated_pending_action",
+        });
+
+        // Step 4: Text typed, but border actions not performed yet -> must require border application
+        let outcome4 = evaluate_task_completion_gate(prompt, &tools3, 4, 25, "Introduction is written.");
+        assert_eq!(outcome4, GateOutcome::RequireContinuation {
+            prompt: "The user requested page borders ('make sure the page have borders'). Please navigate to the Design tab or Page Borders control in Word, apply the page border, and capture a screenshot to visually verify that the page border is applied before completing.".to_string(),
+            reason: "unexecuted_borders",
+        });
+
+        // Step 5: Border navigated and applied, followed by screenshot verification -> outcome confirmed!
+        let tools5 = vec![
+            "desktop_control_launch_app".to_string(),
+            "desktop_control_keyboard_action".to_string(),
+            "desktop_control_mouse_action".to_string(),
+            "desktop_control_mouse_action".to_string(),
+            "desktop_control_capture_screenshot".to_string(),
+        ];
+        let outcome5 = evaluate_task_completion_gate(prompt, &tools5, 5, 25, "I have applied page borders in Word and verified the document visually.");
+        assert_eq!(outcome5, GateOutcome::AllowCompletion);
+    }
+
+    #[test]
+    fn test_watchdog_heartbeat_tracking() {
+        use crate::plugins::desktop_control::cursor;
+        use crate::plugins::desktop_control::overlay::AutomationSessionState;
+
+        let test_session = "test-session-heartbeat-123";
+        cursor::touch_task_heartbeat(test_session, AutomationSessionState::WaitingForModel);
+        cursor::touch_activity();
+        cursor::touch_task_heartbeat(test_session, AutomationSessionState::ExecutingTool);
+        cursor::touch_task_heartbeat(test_session, AutomationSessionState::Verifying);
     }
 }
 

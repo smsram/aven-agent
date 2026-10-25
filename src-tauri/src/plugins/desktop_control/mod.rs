@@ -911,7 +911,7 @@ pub fn execute_desktop_control_capability(
             let target = args
                 .get("target")
                 .and_then(|v| v.as_str())
-                .unwrap_or("foreground_window");
+                .unwrap_or("virtual_desktop");
             let target_hwnd = args
                 .get("window_id")
                 .or_else(|| args.get("target_hwnd"))
